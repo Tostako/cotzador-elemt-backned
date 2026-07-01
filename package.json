@@ -1,0 +1,41 @@
+{
+  "name": "element-backend-microservices",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ELEMENT Cotizador backend microservices launcher",
+  "scripts": {
+    "install:all": "npm run install:gateway && npm run install:services && npm run install:database",
+    "install:gateway": "cd api-gateway && npm install",
+    "install:services": "npm run install:auth && npm run install:quotes && npm run install:payments && npm run install:config && npm run install:catalog && npm run install:public && npm run install:tile",
+    "install:auth": "cd services/auth-service && npm install",
+    "install:quotes": "cd services/quotes-service && npm install",
+    "install:payments": "cd services/payments-service && npm install",
+    "install:config": "cd services/config-service && npm install",
+    "install:catalog": "cd services/catalog-service && npm install",
+    "install:public": "cd services/public-service && npm install",
+    "install:tile": "cd services/tile-calculator-service && npm install",
+    "install:database": "cd ../database && npm install",
+    "build:all": "npm run build:gateway && npm run build:services",
+    "build:gateway": "cd api-gateway && npm run build",
+    "build:services": "npm run build:auth && npm run build:quotes && npm run build:payments && npm run build:config && npm run build:catalog && npm run build:public && npm run build:tile",
+    "build:auth": "cd services/auth-service && npm run build",
+    "build:quotes": "cd services/quotes-service && npm run build",
+    "build:payments": "cd services/payments-service && npm run build",
+    "build:config": "cd services/config-service && npm run build",
+    "build:catalog": "cd services/catalog-service && npm run build",
+    "build:public": "cd services/public-service && npm run build",
+    "build:tile": "cd services/tile-calculator-service && npm run build",
+    "dev": "concurrently -n gateway,auth,quotes,payments,config,catalog,public,tile \"npm:dev:gateway\" \"npm:dev:auth\" \"npm:dev:quotes\" \"npm:dev:payments\" \"npm:dev:config\" \"npm:dev:catalog\" \"npm:dev:public\" \"npm:dev:tile\"",
+    "dev:gateway": "cd api-gateway && npm run start:dev",
+    "dev:auth": "cd services/auth-service && npm run start:dev",
+    "dev:quotes": "cd services/quotes-service && npm run start:dev",
+    "dev:payments": "cd services/payments-service && npm run start:dev",
+    "dev:config": "cd services/config-service && npm run start:dev",
+    "dev:catalog": "cd services/catalog-service && npm run start:dev",
+    "dev:public": "cd services/public-service && npm run start:dev",
+    "dev:tile": "cd services/tile-calculator-service && npm run start:dev"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

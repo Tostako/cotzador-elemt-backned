@@ -1,0 +1,138 @@
+# Render Blueprint para ELEMENT Cotizador (backend microservicios)
+# Este archivo crea 1 Web Service público (gateway) y 7 Private Services (microservicios).
+# Las variables sensibles (DATABASE_URL, JWT_SECRET, INTERNAL_API_KEY) deben configurarse
+# en el dashboard de Render como Environment Variables de cada servicio.
+
+services:
+  # ── API Gateway (público) ──
+  - type: web
+    name: element-gateway
+    runtime: node
+    plan: standard
+    buildCommand: cd api-gateway && npm install && npm run build
+    startCommand: cd api-gateway && npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: AUTH_URL
+        fromService:
+          name: element-auth
+          type: pserv
+          property: hostport
+      - key: QUOTES_URL
+        fromService:
+          name: element-quotes
+          type: pserv
+          property: hostport
+      - key: PAYMENTS_URL
+        fromService:
+          name: element-payments
+          type: pserv
+          property: hostport
+      - key: CONFIG_URL
+        fromService:
+          name: element-config
+          type: pserv
+          property: hostport
+      - key: CATALOG_URL
+        fromService:
+          name: element-catalog
+          type: pserv
+          property: hostport
+      - key: PUBLIC_URL
+        fromService:
+          name: element-public
+          type: pserv
+          property: hostport
+      - key: TILE_CALCULATOR_URL
+        fromService:
+          name: element-tile
+          type: pserv
+          property: hostport
+
+  # ── Microservicios (privados, solo accesibles por el gateway) ──
+  - type: pserv
+    name: element-auth
+    runtime: node
+    plan: standard
+    buildCommand: cd services/auth-service && npm install && npm run build
+    startCommand: cd services/auth-service && npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+
+  - type: pserv
+    name: element-quotes
+    runtime: node
+    plan: standard
+    buildCommand: cd services/quotes-service && npm install && npm run build
+    startCommand: cd services/quotes-service && npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3002
+
+  - type: pserv
+    name: element-payments
+    runtime: node
+    plan: standard
+    buildCommand: cd services/payments-service && npm install && npm run build
+    startCommand: cd services/payments-service && npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3003
+
+  - type: pserv
+    name: element-config
+    runtime: node
+    plan: standard
+    buildCommand: cd services/config-service && npm install && npm run build
+    startCommand: cd services/config-service && npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3004
+
+  - type: pserv
+    name: element-catalog
+    runtime: node
+    plan: standard
+    buildCommand: cd services/catalog-service && npm install && npm run build
+    startCommand: cd services/catalog-service && npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3005
+
+  - type: pserv
+    name: element-public
+    runtime: node
+    plan: standard
+    buildCommand: cd services/public-service && npm install && npm run build
+    startCommand: cd services/public-service && npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3006
+
+  - type: pserv
+    name: element-tile
+    runtime: node
+    plan: standard
+    buildCommand: cd services/tile-calculator-service && npm install && npm run build
+    startCommand: cd services/tile-calculator-service && npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3007
