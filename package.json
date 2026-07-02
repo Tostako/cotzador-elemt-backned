@@ -4,7 +4,8 @@
   "private": true,
   "description": "ELEMENT Cotizador backend microservices launcher",
   "scripts": {
-    "install:all": "npm run install:gateway && npm run install:services && npm run install:database",
+    "postinstall": "npm run install:all",
+    "install:all": "npm run install:gateway && npm run install:services",
     "install:gateway": "cd api-gateway && npm install",
     "install:services": "npm run install:auth && npm run install:quotes && npm run install:payments && npm run install:config && npm run install:catalog && npm run install:public && npm run install:tile",
     "install:auth": "cd services/auth-service && npm install",
@@ -14,7 +15,7 @@
     "install:catalog": "cd services/catalog-service && npm install",
     "install:public": "cd services/public-service && npm install",
     "install:tile": "cd services/tile-calculator-service && npm install",
-    "install:database": "cd ../database && npm install",
+    "build": "npm run build:all",
     "build:all": "npm run build:gateway && npm run build:services",
     "build:gateway": "cd api-gateway && npm run build",
     "build:services": "npm run build:auth && npm run build:quotes && npm run build:payments && npm run build:config && npm run build:catalog && npm run build:public && npm run build:tile",
@@ -25,6 +26,9 @@
     "build:catalog": "cd services/catalog-service && npm run build",
     "build:public": "cd services/public-service && npm run build",
     "build:tile": "cd services/tile-calculator-service && npm run build",
+    "start": "npm run start:all",
+    "start:all": "concurrently -n gateway,auth,quotes,payments,config,catalog,public,tile \"cd api-gateway && npm run start\" \"cd services/auth-service && npm run start\" \"cd services/quotes-service && npm run start\" \"cd services/payments-service && npm run start\" \"cd services/config-service && npm run start\" \"cd services/catalog-service && npm run start\" \"cd services/public-service && npm run start\" \"cd services/tile-calculator-service && npm run start\"",
+    "start:services": "concurrently -n auth,quotes,payments,config,catalog,public,tile \"cd services/auth-service && npm run start\" \"cd services/quotes-service && npm run start\" \"cd services/payments-service && npm run start\" \"cd services/config-service && npm run start\" \"cd services/catalog-service && npm run start\" \"cd services/public-service && npm run start\" \"cd services/tile-calculator-service && npm run start\"",
     "dev": "concurrently -n gateway,auth,quotes,payments,config,catalog,public,tile \"npm:dev:gateway\" \"npm:dev:auth\" \"npm:dev:quotes\" \"npm:dev:payments\" \"npm:dev:config\" \"npm:dev:catalog\" \"npm:dev:public\" \"npm:dev:tile\"",
     "dev:gateway": "cd api-gateway && npm run start:dev",
     "dev:auth": "cd services/auth-service && npm run start:dev",
@@ -35,7 +39,7 @@
     "dev:public": "cd services/public-service && npm run start:dev",
     "dev:tile": "cd services/tile-calculator-service && npm run start:dev"
   },
-  "devDependencies": {
+  "dependencies": {
     "concurrently": "^8.2.2"
   }
 }
