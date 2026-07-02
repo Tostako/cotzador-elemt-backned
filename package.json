@@ -29,6 +29,7 @@
     "start": "npm run start:all",
     "start:all": "concurrently -n gateway,auth,quotes,payments,config,catalog,public,tile \"cd api-gateway && npm run start\" \"cd services/auth-service && npm run start\" \"cd services/quotes-service && npm run start\" \"cd services/payments-service && npm run start\" \"cd services/config-service && npm run start\" \"cd services/catalog-service && npm run start\" \"cd services/public-service && npm run start\" \"cd services/tile-calculator-service && npm run start\"",
     "start:services": "concurrently -n auth,quotes,payments,config,catalog,public,tile \"cd services/auth-service && npm run start\" \"cd services/quotes-service && npm run start\" \"cd services/payments-service && npm run start\" \"cd services/config-service && npm run start\" \"cd services/catalog-service && npm run start\" \"cd services/public-service && npm run start\" \"cd services/tile-calculator-service && npm run start\"",
+    "start:aux": "./start-aux-services.sh",
     "dev": "concurrently -n gateway,auth,quotes,payments,config,catalog,public,tile \"npm:dev:gateway\" \"npm:dev:auth\" \"npm:dev:quotes\" \"npm:dev:payments\" \"npm:dev:config\" \"npm:dev:catalog\" \"npm:dev:public\" \"npm:dev:tile\"",
     "dev:gateway": "cd api-gateway && npm run start:dev",
     "dev:auth": "cd services/auth-service && npm run start:dev",
