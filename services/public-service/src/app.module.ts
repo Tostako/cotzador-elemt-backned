@@ -16,8 +16,8 @@ import { HealthModule } from './health/health.module';
       imports: [ConfigModule],
       useFactory: (config: ConfigService) => ({
         type: 'postgres',
-        url: config.get<string>('DATABASE_URL'),
-        schema: config.get<string>('DATABASE_SCHEMA') || undefined,
+        url: config.get<string>('DATABASE_URL') || config.get<string>('SUPABASE_DATABASE_URL'),
+        schema: config.get<string>('DATABASE_SCHEMA') || config.get<string>('PUBLIC_DATABASE_SCHEMA') || undefined,
         entities: [Shop, SiteConfig, LandingImage],
         synchronize: false,
       }),

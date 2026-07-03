@@ -14,8 +14,8 @@ import { HealthModule } from './health/health.module';
       imports: [NestConfigModule],
       useFactory: (config: ConfigService) => ({
         type: 'postgres',
-        url: config.get<string>('DATABASE_URL'),
-        schema: config.get<string>('DATABASE_SCHEMA') || undefined,
+        url: config.get<string>('DATABASE_URL') || config.get<string>('SUPABASE_DATABASE_URL'),
+        schema: config.get<string>('DATABASE_SCHEMA') || config.get<string>('CONFIG_DATABASE_SCHEMA') || undefined,
         entities: [CustomerConfig],
         synchronize: false,
       }),

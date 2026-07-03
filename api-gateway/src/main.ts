@@ -123,5 +123,5 @@ app.use(route('tile-calculator', targets.tileCalculator, (path) => new RegExp(`^
 
 app.use((_req, res) => res.status(404).json({ error: 'Ruta no encontrada en el gateway' }));
 
-const port = process.env.PORT ?? 3000;
+const port = process.env.PORT ?? process.env.GATEWAY_PORT ?? 3000;
 app.listen(port, () => console.log(`API Gateway escuchando en puerto ${port} (prefijo ${PREFIX})`));
