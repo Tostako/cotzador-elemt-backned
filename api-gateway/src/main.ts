@@ -23,6 +23,17 @@ const targets = {
 };
 
 /**
+ * Middleware para normalizar rutas: agrega /api/v1 si no está presente
+ */
+function normalizePathMiddleware(req: Request, res: Response, next: NextFunction) {
+  if (!req.path.startsWith(PREFIX) && req.path !== '/health') {
+    req.url = PREFIX + req.url;
+  }
+  next();
+}
+app.use(normalizePathMiddleware);
+
+/**
  * Genera o reusa un request ID y lo propaga a los microservicios.
  */
 function requestIdMiddleware(req: Request, res: Response, next: NextFunction) {
@@ -69,7 +80,7 @@ const route = (serviceName: string, target: string, pathFilter: Filter) =>
     target,
     changeOrigin: true,
     pathFilter,
-    pathRewrite: (path) => path.replace(new RegExp(`^${PREFIX}`), '').replace(/\/+/g, '/') || '/',
+    pathRewrite: { [`^${PREFIX}`]: '' },
     on: {
       proxyReq: (proxyReq, req: Request) => {
         const requestId = req.headers['x-request-id'] as string;
