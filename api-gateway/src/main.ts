@@ -60,9 +60,9 @@ app.get('/health', (_req, res) =>
 );
 
 /**
- * Crea un proxy que solo actúa si la ruta cumple el filtro.
- * Quita el prefijo /api/v1 antes de reenviar al microservicio.
- * Propaga x-request-id, x-shop-slug y authorization.
+ * Crea un proxy que actúa si la ruta cumple el filtro.
+ * Acepta rutas con o sin el prefijo /api/v1.
+ * Quita el prefijo antes de reenviar al microservicio.
  */
 const route = (serviceName: string, target: string, pathFilter: Filter) =>
   createProxyMiddleware({
@@ -93,35 +93,38 @@ const route = (serviceName: string, target: string, pathFilter: Filter) =>
     },
   });
 
+// Helper para crear filtros que acepten /api/v1/ruta o /ruta
+const prefixed = (segment: string) => new RegExp(`^(${PREFIX})?/${segment}`);
+
 // ── Orden importante: las rutas más específicas primero ──
 
 // Payments: payment-plans/* y quotes/:id/payments
 app.use(
   route('payments', targets.payments, (path) =>
-    new RegExp(`^${PREFIX}/payment-plans`).test(path) ||
-    new RegExp(`^${PREFIX}/quotes/[^/]+/payments`).test(path),
+    prefixed('payment-plans').test(path) ||
+    new RegExp(`^(${PREFIX})?/quotes/[^/]+/payments`).test(path),
   ),
 );
 
 // Quotes: el resto de /quotes/*
-app.use(route('quotes', targets.quotes, (path) => new RegExp(`^${PREFIX}/quotes`).test(path)));
+app.use(route('quotes', targets.quotes, (path) => prefixed('quotes').test(path)));
 
 // Auth & Tenant: /auth/* y /customers/*
-app.use(route('auth', targets.auth, (path) => new RegExp(`^${PREFIX}/(auth|customers)`).test(path)));
+app.use(route('auth', targets.auth, (path) => new RegExp(`^(${PREFIX})?/(auth|customers)`).test(path)));
 
 // Config: /customer-config/*
-app.use(route('config', targets.config, (path) => new RegExp(`^${PREFIX}/customer-config`).test(path)));
+app.use(route('config', targets.config, (path) => prefixed('customer-config').test(path)));
 
 // Catalog: /quote-catalog/*
-app.use(route('catalog', targets.catalog, (path) => new RegExp(`^${PREFIX}/quote-catalog`).test(path)));
+app.use(route('catalog', targets.catalog, (path) => prefixed('quote-catalog').test(path)));
 
 // Public/Site: /public/*
-app.use(route('public', targets.public, (path) => new RegExp(`^${PREFIX}/public`).test(path)));
+app.use(route('public', targets.public, (path) => prefixed('public').test(path)));
 
 // Tile Calculator: /tile-calculator/*
-app.use(route('tile-calculator', targets.tileCalculator, (path) => new RegExp(`^${PREFIX}/tile-calculator`).test(path)));
+app.use(route('tile-calculator', targets.tileCalculator, (path) => prefixed('tile-calculator').test(path)));
 
 app.use((_req, res) => res.status(404).json({ error: 'Ruta no encontrada en el gateway' }));
 
 const port = process.env.PORT ?? process.env.GATEWAY_PORT ?? 3000;
-app.listen(port, () => console.log(`API Gateway escuchando en puerto ${port} (prefijo ${PREFIX})`));
+app.listen(port, () => console.log(`API Gateway escuchando en puerto ${port} (acepta prefijo ${PREFIX} o sin prefijo)`));
