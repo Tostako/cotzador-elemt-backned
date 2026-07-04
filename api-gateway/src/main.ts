@@ -69,7 +69,7 @@ const route = (serviceName: string, target: string, pathFilter: Filter) =>
     target,
     changeOrigin: true,
     pathFilter,
-    pathRewrite: { [`^${PREFIX}`]: '' },
+    pathRewrite: (path) => path.replace(new RegExp(`^${PREFIX}`), '').replace(/\/+/g, '/') || '/',
     on: {
       proxyReq: (proxyReq, req: Request) => {
         const requestId = req.headers['x-request-id'] as string;
