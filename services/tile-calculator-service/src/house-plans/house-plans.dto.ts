@@ -1,4 +1,4 @@
-import { IsArray, IsBoolean, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsNumber, IsOptional, IsString, MaxLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class PuntoDto {
@@ -7,12 +7,12 @@ export class PuntoDto {
 }
 
 export class NodoDto extends PuntoDto {
-  @IsString() id: string;
+  @IsString() @MaxLength(50) id: string;
 }
 
 export class MuroDto {
-  @IsString() a: string;
-  @IsString() b: string;
+  @IsString() @MaxLength(50) a: string;
+  @IsString() @MaxLength(50) b: string;
   @IsOptional() @IsBoolean() abertura?: boolean;
   @IsOptional() @Type(() => Number) @IsNumber() columnas?: number;
 }
@@ -23,15 +23,15 @@ export class SegmentoDto {
 }
 
 export class EspacioDto {
-  @IsString() id: string;
-  @IsString() nombre: string;
-  @IsString() tipo: string;
+  @IsString() @MaxLength(120) id: string;
+  @IsString() @MaxLength(120) nombre: string;
+  @IsString() @MaxLength(60) tipo: string;
 
-  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => NodoDto) nodos?: NodoDto[];
-  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => MuroDto) muros?: MuroDto[];
-  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => PuntoDto) puntos?: PuntoDto[];
+  @IsOptional() @IsArray() @ArrayMaxSize(500) @ValidateNested({ each: true }) @Type(() => NodoDto) nodos?: NodoDto[];
+  @IsOptional() @IsArray() @ArrayMaxSize(500) @ValidateNested({ each: true }) @Type(() => MuroDto) muros?: MuroDto[];
+  @IsOptional() @IsArray() @ArrayMaxSize(500) @ValidateNested({ each: true }) @Type(() => PuntoDto) puntos?: PuntoDto[];
 
-  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => SegmentoDto) segmentos?: SegmentoDto[];
+  @IsOptional() @IsArray() @ArrayMaxSize(500) @ValidateNested({ each: true }) @Type(() => SegmentoDto) segmentos?: SegmentoDto[];
   @IsOptional() x?: number;
   @IsOptional() y?: number;
 
@@ -41,32 +41,32 @@ export class EspacioDto {
 }
 
 export class ConexionDto {
-  @IsString() id: string;
-  @IsString() a: string;
-  @IsString() b: string;
+  @IsString() @MaxLength(50) id: string;
+  @IsString() @MaxLength(50) a: string;
+  @IsString() @MaxLength(50) b: string;
 }
 
 export class NivelDto {
-  @IsString() id: string;
-  @IsString() nombre: string;
-  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => EspacioDto) espacios?: EspacioDto[];
-  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => ConexionDto) conexiones?: ConexionDto[];
+  @IsString() @MaxLength(50) id: string;
+  @IsString() @MaxLength(120) nombre: string;
+  @IsOptional() @IsArray() @ArrayMaxSize(200) @ValidateNested({ each: true }) @Type(() => EspacioDto) espacios?: EspacioDto[];
+  @IsOptional() @IsArray() @ArrayMaxSize(1000) @ValidateNested({ each: true }) @Type(() => ConexionDto) conexiones?: ConexionDto[];
 }
 
 export class CreateHousePlanDto {
-  @IsString() nombre: string;
-  @IsOptional() @IsString() propietario?: string;
-  @IsOptional() @IsString() ubicacion?: string;
-  @IsArray() @ValidateNested({ each: true }) @Type(() => NivelDto) niveles: NivelDto[];
+  @IsString() @MaxLength(120) nombre: string;
+  @IsOptional() @IsString() @MaxLength(120) propietario?: string;
+  @IsOptional() @IsString() @MaxLength(200) ubicacion?: string;
+  @IsArray() @ArrayMaxSize(50) @ValidateNested({ each: true }) @Type(() => NivelDto) niveles: NivelDto[];
 }
 
 export class UpdateHousePlanDto {
-  @IsOptional() @IsString() nombre?: string;
-  @IsOptional() @IsString() propietario?: string;
-  @IsOptional() @IsString() ubicacion?: string;
-  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => NivelDto) niveles?: NivelDto[];
+  @IsOptional() @IsString() @MaxLength(120) nombre?: string;
+  @IsOptional() @IsString() @MaxLength(120) propietario?: string;
+  @IsOptional() @IsString() @MaxLength(200) ubicacion?: string;
+  @IsOptional() @IsArray() @ArrayMaxSize(50) @ValidateNested({ each: true }) @Type(() => NivelDto) niveles?: NivelDto[];
 }
 
 export class ImportProjectDto {
-  @IsString() nombre: string;
+  @IsString() @MaxLength(120) nombre: string;
 }

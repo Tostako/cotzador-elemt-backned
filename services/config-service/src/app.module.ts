@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+﻿import { Module } from '@nestjs/common';
 import { ConfigModule as NestConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -18,6 +18,14 @@ import { HealthModule } from './health/health.module';
         schema: config.get<string>('DATABASE_SCHEMA') || config.get<string>('CONFIG_DATABASE_SCHEMA') || undefined,
         entities: [CustomerConfig],
         synchronize: false,
+        retryAttempts: 3,
+        retryDelay: 3000,
+        extra: {
+          max: 3,
+          min: 1,
+          idleTimeoutMillis: 10000,
+          connectionTimeoutMillis: 5000,
+        },
       }),
       inject: [ConfigService],
     }),
@@ -27,3 +35,6 @@ import { HealthModule } from './health/health.module';
   providers: [{ provide: APP_GUARD, useClass: JwtAuthGuard }],
 })
 export class AppModule {}
+
+
+

@@ -18,17 +18,25 @@ if (!JWT_SECRET) {
 
 const CORS_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS ?? '*')
   .split(',')
-  .map((o) => o.trim())
+  .map((o) => o.trim().replace(/\/$/, ''))
   .filter(Boolean);
 
 app.use(
   cors({
-    origin: CORS_ORIGINS.includes('*') ? true : CORS_ORIGINS,
+    origin: (origin, callback) => {
+      if (!origin || CORS_ORIGINS.includes('*') || CORS_ORIGINS.includes(origin.replace(/\/$/, ''))) {
+        callback(null, true);
+      } else {
+        console.warn(`[CORS] Origin bloqueado: ${origin}`);
+        callback(new Error('Origen no permitido por CORS'));
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id', 'X-Shop-Slug'],
   }),
 );
+
 app.use(morgan('dev'));
 
 const targets = {
@@ -85,10 +93,14 @@ function isPublicPath(path: string): boolean {
 }
 
 /**
- * Rate limiting simple en memoria para endpoints pÃºblicos sensibles.
+ * Rate limiting en memoria con limpieza periÃ³dica.
  * LÃ­mite: 10 intentos por ventana de 15 minutos por IP + ruta.
  */
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+const rateLimitMap = new Map<string, RateLimitEntry>();
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const RATE_LIMIT_MAX = 10;
 
@@ -120,10 +132,51 @@ function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
 }
 app.use(rateLimitMiddleware);
 
+// Limpia entradas de rate limit expiradas cada 60 segundos.
+setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [key, entry] of rateLimitMap.entries()) {
+    if (now > entry.resetAt) {
+      rateLimitMap.delete(key);
+      cleaned += 1;
+    }
+  }
+  if (cleaned > 0) {
+    console.log(`[RATE-LIMIT] Limpiadas ${cleaned} entradas expiradas`);
+  }
+}, 60_000);
+
+/**
+ * CachÃ© de tokens JWT verificados.
+ * TTL: 60 segundos. Evita re-verificar el mismo token en cada request.
+ */
+interface CachedToken {
+  payload: JwtPayload;
+  expiresAt: number;
+}
+const jwtCache = new Map<string, CachedToken>();
+const JWT_CACHE_TTL_MS = 60_000;
+
+// Limpia tokens en cachÃ© expirados cada 60 segundos.
+setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [key, entry] of jwtCache.entries()) {
+    if (now > entry.expiresAt) {
+      jwtCache.delete(key);
+      cleaned += 1;
+    }
+  }
+  if (cleaned > 0) {
+    console.log(`[JWT-CACHE] Limpiados ${cleaned} tokens expirados`);
+  }
+}, 60_000);
+
 /**
  * Valida el JWT en el gateway para todas las rutas no pÃºblicas.
+ * Usa cachÃ© de 60s para no re-verificar el mismo token constantemente.
  * Rechaza tokens invÃ¡lidos o ausentes antes de llegar a los microservicios.
- * Inyecta headers de contexto de forma segura.
  */
 function jwtMiddleware(req: Request, res: Response, next: NextFunction) {
   if (isPublicPath(req.path)) return next();
@@ -133,10 +186,26 @@ function jwtMiddleware(req: Request, res: Response, next: NextFunction) {
     return res.status(401).json({ error: 'Se requiere un token de autenticaciÃ³n vÃ¡lido' });
   }
 
+  const token = auth.slice(7);
+  const now = Date.now();
+
+  const cached = jwtCache.get(token);
+  if (cached && now < cached.expiresAt) {
+    req.headers['x-customer-id'] = cached.payload.customer_id ?? cached.payload.sub ?? '';
+    req.headers['x-shop-id'] = cached.payload.shop_id ?? '';
+    req.headers['x-user-email'] = cached.payload.email ?? '';
+    req.headers['x-user-role'] = cached.payload.role ?? 'customer';
+    return next();
+  }
+
   try {
-      const payload = jwt.verify(auth.slice(7), JWT_SECRET as string) as JwtPayload;
+    const payload = jwt.verify(token, JWT_SECRET as string) as JwtPayload;
+    if (!payload.shop_id) {
+      return res.status(401).json({ error: 'Token incompleto' });
+    }
+    jwtCache.set(token, { payload, expiresAt: now + JWT_CACHE_TTL_MS });
     req.headers['x-customer-id'] = payload.customer_id ?? payload.sub ?? '';
-    req.headers['x-shop-id'] = payload.shop_id ?? '';
+    req.headers['x-shop-id'] = payload.shop_id;
     req.headers['x-user-email'] = payload.email ?? '';
     req.headers['x-user-role'] = payload.role ?? 'customer';
     next();
@@ -173,6 +242,38 @@ app.get('/health', (_req, res) =>
 );
 
 /**
+ * Control de concurrencia por servicio.
+ * MÃ¡ximo 150 requests concurrentes reenviadas a cada microservicio.
+ * Si se excede, devuelve 503 para proteger el backend.
+ */
+const MAX_CONCURRENT_PER_SERVICE = 150;
+const concurrentRequests: Record<string, number> = {
+  auth: 0,
+  quotes: 0,
+  payments: 0,
+  config: 0,
+  catalog: 0,
+  public: 0,
+  tileCalculator: 0,
+};
+
+function acquireSlot(serviceName: string, res: Response): boolean {
+  if (concurrentRequests[serviceName] >= MAX_CONCURRENT_PER_SERVICE) {
+    res.status(503).json({
+      error: 'Servicio temporalmente saturado. Intenta mÃ¡s tarde.',
+      service: serviceName,
+    });
+    return false;
+  }
+  concurrentRequests[serviceName] += 1;
+  return true;
+}
+
+function releaseSlot(serviceName: string) {
+  concurrentRequests[serviceName] = Math.max(0, concurrentRequests[serviceName] - 1);
+}
+
+/**
  * Crea un proxy que actÃºa si la ruta cumple el filtro.
  * Acepta rutas con o sin el prefijo /api/v1.
  * Quita el prefijo antes de reenviar al microservicio.
@@ -184,7 +285,12 @@ const route = (serviceName: string, target: string, pathFilter: Filter) =>
     pathFilter,
     pathRewrite: (path) => path.replace(new RegExp(`^${PREFIX}`), '').replace(/\/+/g, '/') || '/',
     on: {
-      proxyReq: (proxyReq, req: Request) => {
+      proxyReq: (proxyReq, req: Request, res: Response) => {
+        if (!acquireSlot(serviceName, res)) {
+          // Abortar la peticiÃ³n si no hay slot disponible.
+          proxyReq.destroy();
+          return;
+        }
         const requestId = req.headers['x-request-id'] as string;
         proxyReq.setHeader('x-request-id', requestId);
         proxyReq.setHeader('x-gateway-service', 'api-gateway');
@@ -192,15 +298,17 @@ const route = (serviceName: string, target: string, pathFilter: Filter) =>
         proxyReq.setHeader('x-shop-id', (req.headers['x-shop-id'] as string) ?? '');
         proxyReq.setHeader('x-user-email', (req.headers['x-user-email'] as string) ?? '');
         proxyReq.setHeader('x-user-role', (req.headers['x-user-role'] as string) ?? 'customer');
-        console.log(`[GATEWAY -> ${serviceName.toUpperCase()}] ${req.method} ${req.path} | requestId=${requestId}`);
+        console.log(`[GATEWAY -> ${serviceName.toUpperCase()}] ${req.method} ${req.path} | requestId=${requestId} | concurrent=${concurrentRequests[serviceName]}`);
       },
       proxyRes: (proxyRes, req: Request) => {
+        releaseSlot(serviceName);
         const requestId = req.headers['x-request-id'] as string;
         console.log(
-          `[GATEWAY <- ${serviceName.toUpperCase()}] ${req.method} ${req.path} | requestId=${requestId} | status=${proxyRes.statusCode}`,
+          `[GATEWAY <- ${serviceName.toUpperCase()}] ${req.method} ${req.path} | requestId=${requestId} | status=${proxyRes.statusCode} | concurrent=${concurrentRequests[serviceName]}`,
         );
       },
       error: (err, req: Request, res: any) => {
+        releaseSlot(serviceName);
         const requestId = req.headers['x-request-id'] as string;
         console.error(`[GATEWAY ERROR] ${req.method} ${req.path} | requestId=${requestId} | error=${err.message}`);
         if (res && !res.headersSent && typeof res.status === 'function') {
@@ -245,4 +353,3 @@ app.use((_req, res) => res.status(404).json({ error: 'Ruta no encontrada en el g
 
 const port = process.env.PORT ?? process.env.GATEWAY_PORT ?? 3000;
 app.listen(port, () => console.log(`API Gateway escuchando en puerto ${port} (acepta prefijo ${PREFIX} o sin prefijo)`));
-

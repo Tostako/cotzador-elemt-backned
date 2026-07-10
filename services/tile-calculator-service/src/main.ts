@@ -1,14 +1,20 @@
 ﻿import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 import { ResponseInterceptor } from './common/response.interceptor';
 import { AllExceptionsFilter } from './common/all-exceptions.filter';
 import { LoggingInterceptor } from './common/logging.interceptor';
 
+const BODY_LIMIT = process.env.BODY_LIMIT ?? '2mb';
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-    const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? '*')
+  app.use(json({ limit: BODY_LIMIT }));
+  app.use(urlencoded({ extended: true, limit: BODY_LIMIT }));
+
+  const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? '*')
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean);
@@ -26,5 +32,6 @@ async function bootstrap() {
   console.log('tile-calculator-service escuchando en puerto ' + port);
 }
 bootstrap();
+
 
 

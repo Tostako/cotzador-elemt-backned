@@ -1,10 +1,22 @@
-# Render Blueprint para ELEMENT Cotizador (versión gratuita)
+﻿# Render Blueprint para ELEMENT Cotizador (versión gratuita)
 # Crea 8 Web Services públicos. Todos son accesibles por internet,
 # pero el frontend solo debería apuntar al gateway.
 #
 # IMPORTANTE: Render Blueprint puede requerir plan de pago.
 # Si no podés usar Blueprint, seguí las instrucciones de RENDER.md para crear
 # los servicios manualmente uno por uno con los mismos Build/Start Commands.
+#
+# ANTES DE DESPLEGAR:
+# 1. Editá el envVarGroup `element-secrets` con tu JWT_SECRET y SUPABASE_DATABASE_URL reales.
+# 2. Si usás Blueprint, JWT_SECRET debe ser el MISMO en gateway y todos los servicios.
+
+envVarGroups:
+  - name: element-secrets
+    envVars:
+      - key: JWT_SECRET
+        value: cambia-esto-por-un-secreto-largo-y-seguro
+      - key: SUPABASE_DATABASE_URL
+        value: postgresql://postgres.ktmsemzpnpvlcyxjtqlf:TU_PASSWORD@aws-1-us-east-1.pooler.supabase.com:5432/postgres
 
 services:
   - type: web
@@ -20,6 +32,8 @@ services:
         value: production
       - key: GATEWAY_PORT
         value: 3000
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://cotzador-elemt.vercel.app
       - key: AUTH_URL
         value: https://element-auth.onrender.com
       - key: QUOTES_URL
@@ -34,6 +48,7 @@ services:
         value: https://element-public.onrender.com
       - key: TILE_CALCULATOR_URL
         value: https://element-tile.onrender.com
+      - fromGroup: element-secrets
 
   - type: web
     name: element-auth
@@ -46,10 +61,13 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://cotzador-elemt.vercel.app
       - key: PORT
         value: 3001
       - key: AUTH_DATABASE_SCHEMA
         value: element_auth
+      - fromGroup: element-secrets
 
   - type: web
     name: element-quotes
@@ -62,12 +80,15 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://cotzador-elemt.vercel.app
       - key: PORT
         value: 3002
       - key: QUOTES_DATABASE_SCHEMA
         value: quotes
       - key: INTERNAL_API_KEY
         value: element-internal-key
+      - fromGroup: element-secrets
 
   - type: web
     name: element-payments
@@ -80,6 +101,8 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://cotzador-elemt.vercel.app
       - key: PORT
         value: 3003
       - key: PAYMENTS_DATABASE_SCHEMA
@@ -88,6 +111,7 @@ services:
         value: https://element-quotes.onrender.com
       - key: INTERNAL_API_KEY
         value: element-internal-key
+      - fromGroup: element-secrets
 
   - type: web
     name: element-config
@@ -100,10 +124,13 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://cotzador-elemt.vercel.app
       - key: PORT
         value: 3004
       - key: CONFIG_DATABASE_SCHEMA
         value: config
+      - fromGroup: element-secrets
 
   - type: web
     name: element-catalog
@@ -116,10 +143,13 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://cotzador-elemt.vercel.app
       - key: PORT
         value: 3005
       - key: CATALOG_DATABASE_SCHEMA
         value: catalog
+      - fromGroup: element-secrets
 
   - type: web
     name: element-public
@@ -132,10 +162,13 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://cotzador-elemt.vercel.app
       - key: PORT
         value: 3006
       - key: PUBLIC_DATABASE_SCHEMA
         value: site
+      - fromGroup: element-secrets
 
   - type: web
     name: element-tile
@@ -148,7 +181,10 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://cotzador-elemt.vercel.app
       - key: PORT
         value: 3007
       - key: TILE_CALCULATOR_DATABASE_SCHEMA
         value: tile_calculator
+      - fromGroup: element-secrets
