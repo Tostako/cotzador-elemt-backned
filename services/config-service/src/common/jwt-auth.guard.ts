@@ -1,4 +1,4 @@
-import {
+﻿import {
   CanActivate,
   ExecutionContext,
   Injectable,
@@ -18,8 +18,9 @@ interface JwtPayload {
 
 /**
  * Valida el JWT (Authorization: Bearer) y adjunta req.user.
- * Confía en los headers internos del Gateway (X-Customer-Id / X-Shop-Id)
- * cuando el token no trae shop_id. Las rutas @Public() se dejan pasar.
+ * NUNCA confía en headers internos entrantes (X-Customer-Id / X-Shop-Id):
+ * extrae shop_id y customer_id ÚNICAMENTE del token verificado.
+ * Las rutas @Public() se dejan pasar.
  */
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -39,10 +40,13 @@ export class JwtAuthGuard implements CanActivate {
     }
     try {
       const payload = jwt.verify(auth.slice(7), process.env.JWT_SECRET as string) as JwtPayload;
+      if (!payload.shop_id) {
+        throw new UnauthorizedException('Token incompleto: falta el contexto de tienda');
+      }
       req.user = {
         id: payload.sub,
         customer_id: payload.customer_id ?? payload.sub,
-        shop_id: payload.shop_id ?? (req.headers['x-shop-id'] as string) ?? '',
+        shop_id: payload.shop_id,
         email: payload.email,
         role: payload.role ?? 'customer',
       };

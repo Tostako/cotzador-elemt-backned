@@ -1,4 +1,4 @@
-import {
+﻿import {
   ArgumentsHost,
   Catch,
   ExceptionFilter,
@@ -59,8 +59,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
       const joined = Array.isArray(raw) ? raw.join(', ') : raw;
       message = humanizeValidation(joined);
     } else if (exception instanceof Error) {
-      message = exception.message;
-      this.logger.error(`[${requestId}] ${message}`, exception.stack);
+      // No exponer mensajes internos de errores no controlados (DB, red, etc.).
+      this.logger.error(`[${requestId}] ${exception.message}`, exception.stack);
     }
 
     this.logger.error(`[${requestId}] ${req.method} ${req.url} -> ${status}: ${message}`);

@@ -89,20 +89,30 @@ export class AuthService {
     return { token: this.sign(customer) };
   }
 
-  async me(customerId: string): Promise<Customer> {
-    const customer = await this.customers.findOne({ where: { id: customerId } });
+  async me(customerId: string, shopId: string): Promise<Customer> {
+    const customer = await this.customers.findOne({
+      where: { id: customerId, shop_id: shopId },
+    });
     if (!customer) throw new NotFoundException('Cliente no encontrado');
     return customer;
   }
 
-  async resetPassword(dto: ResetPasswordDto): Promise<{ ok: true }> {
-    if (!dto.email && !dto.phone) throw new BadRequestException('Envía email o teléfono');
-    const shop = await this.resolveShop(dto.shop_slug);
-    const where = dto.email
-      ? { shop_id: shop.id, email: dto.email }
-      : { shop_id: shop.id, phone: dto.phone };
-    const customer = await this.customers.findOne({ where });
-    if (!customer) throw new NotFoundException('Cliente no encontrado');
+  async resetPassword(
+    customerId: string,
+    shopId: string,
+    dto: ResetPasswordDto,
+  ): Promise<{ ok: true }> {
+    const customer = await this.customers
+      .createQueryBuilder('c')
+      .addSelect('c.password')
+      .where('c.id = :id AND c.shop_id = :shopId', { id: customerId, shopId })
+      .getOne();
+    if (!customer?.password) {
+      throw new NotFoundException('Cliente no encontrado');
+    }
+    if (!(await bcrypt.compare(dto.old_password, customer.password))) {
+      throw new UnauthorizedException('La contraseña actual no es correcta');
+    }
     await this.customers.update(customer.id, {
       password: await bcrypt.hash(dto.new_password, 10),
     });

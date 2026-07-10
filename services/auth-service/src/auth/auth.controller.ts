@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post, Request } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto, ResetPasswordDto, SelectShopDto } from './auth.dto';
 import { Public } from '../common/public.decorator';
@@ -10,19 +10,7 @@ export class AuthController {
 
   @Public() @Post('customer/register')
   register(@Body() dto: RegisterDto) {
-    console.log('[AUTH-CONTROLLER] register body:', JSON.stringify(dto));
     return this.auth.register(dto);
-  }
-
-  @Public() @Post('debug')
-  debug(@Body() body: any, @Request() req: any) {
-    return {
-      method: req.method,
-      url: req.url,
-      path: req.path,
-      headers: req.headers,
-      body,
-    };
   }
 
   @Public() @Post('customer/login')
@@ -37,12 +25,19 @@ export class AuthController {
   }
 
   @Get('me')
-  me(@CurrentUser('customer_id') customerId: string) {
-    return this.auth.me(customerId);
+  me(
+    @CurrentUser('customer_id') customerId: string,
+    @CurrentUser('shop_id') shopId: string,
+  ) {
+    return this.auth.me(customerId, shopId);
   }
 
-  @Public() @Patch('customer/reset-password')
-  resetPassword(@Body() dto: ResetPasswordDto) {
-    return this.auth.resetPassword(dto);
+  @Patch('customer/reset-password')
+  resetPassword(
+    @CurrentUser('customer_id') customerId: string,
+    @CurrentUser('shop_id') shopId: string,
+    @Body() dto: ResetPasswordDto,
+  ) {
+    return this.auth.resetPassword(customerId, shopId, dto);
   }
 }

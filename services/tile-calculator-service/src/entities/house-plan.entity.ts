@@ -1,18 +1,15 @@
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
-import { Nivel, Material, Sobrante } from './tile-project.types';
+import { Nivel } from '../common/house-plan.interfaces';
 
-@Entity('tile_projects')
-export class TileProject {
+@Entity('house_plans')
+export class HousePlan {
   @PrimaryGeneratedColumn('uuid') id: string;
   @Column({ name: 'shop_id' }) shop_id: string;
   @Column({ name: 'customer_id' }) customer_id: string;
-  @Column({ name: 'house_plan_id', type: 'uuid', nullable: true }) house_plan_id: string | null;
   @Column() nombre: string;
   @Column({ nullable: true }) propietario: string | null;
   @Column({ nullable: true }) ubicacion: string | null;
   @Column({ type: 'jsonb', default: [] }) niveles: Nivel[];
-  @Column({ type: 'jsonb', default: [] }) materiales: Material[];
-  @Column({ name: 'banco_sobrantes', type: 'jsonb', default: [] }) banco_sobrantes: Sobrante[];
   @CreateDateColumn({ name: 'created_at' }) created_at: Date;
   @UpdateDateColumn({ name: 'updated_at' }) updated_at: Date;
 }

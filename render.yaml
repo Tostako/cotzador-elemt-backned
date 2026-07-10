@@ -1,138 +1,154 @@
-# Render Blueprint para ELEMENT Cotizador (backend microservicios)
-# Este archivo crea 1 Web Service público (gateway) y 7 Private Services (microservicios).
-# Las variables sensibles (DATABASE_URL, JWT_SECRET, INTERNAL_API_KEY) deben configurarse
-# en el dashboard de Render como Environment Variables de cada servicio.
+# Render Blueprint para ELEMENT Cotizador (versión gratuita)
+# Crea 8 Web Services públicos. Todos son accesibles por internet,
+# pero el frontend solo debería apuntar al gateway.
+#
+# IMPORTANTE: Render Blueprint puede requerir plan de pago.
+# Si no podés usar Blueprint, seguí las instrucciones de RENDER.md para crear
+# los servicios manualmente uno por uno con los mismos Build/Start Commands.
 
 services:
-  # ── API Gateway (público) ──
   - type: web
     name: element-gateway
     runtime: node
-    plan: standard
-    buildCommand: cd api-gateway && npm install && npm run build
-    startCommand: cd api-gateway && npm run start
+    plan: free
+    region: oregon
+    rootDir: api-gateway
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
+      - key: GATEWAY_PORT
         value: 3000
       - key: AUTH_URL
-        fromService:
-          name: element-auth
-          type: pserv
-          property: hostport
+        value: https://element-auth.onrender.com
       - key: QUOTES_URL
-        fromService:
-          name: element-quotes
-          type: pserv
-          property: hostport
+        value: https://element-quotes.onrender.com
       - key: PAYMENTS_URL
-        fromService:
-          name: element-payments
-          type: pserv
-          property: hostport
+        value: https://element-payments.onrender.com
       - key: CONFIG_URL
-        fromService:
-          name: element-config
-          type: pserv
-          property: hostport
+        value: https://element-config.onrender.com
       - key: CATALOG_URL
-        fromService:
-          name: element-catalog
-          type: pserv
-          property: hostport
+        value: https://element-catalog.onrender.com
       - key: PUBLIC_URL
-        fromService:
-          name: element-public
-          type: pserv
-          property: hostport
+        value: https://element-public.onrender.com
       - key: TILE_CALCULATOR_URL
-        fromService:
-          name: element-tile
-          type: pserv
-          property: hostport
+        value: https://element-tile.onrender.com
 
-  # ── Microservicios (privados, solo accesibles por el gateway) ──
-  - type: pserv
+  - type: web
     name: element-auth
     runtime: node
-    plan: standard
-    buildCommand: cd services/auth-service && npm install && npm run build
-    startCommand: cd services/auth-service && npm run start
+    plan: free
+    region: oregon
+    rootDir: services/auth-service
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 3001
+      - key: AUTH_DATABASE_SCHEMA
+        value: element_auth
 
-  - type: pserv
+  - type: web
     name: element-quotes
     runtime: node
-    plan: standard
-    buildCommand: cd services/quotes-service && npm install && npm run build
-    startCommand: cd services/quotes-service && npm run start
+    plan: free
+    region: oregon
+    rootDir: services/quotes-service
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 3002
+      - key: QUOTES_DATABASE_SCHEMA
+        value: quotes
+      - key: INTERNAL_API_KEY
+        value: element-internal-key
 
-  - type: pserv
+  - type: web
     name: element-payments
     runtime: node
-    plan: standard
-    buildCommand: cd services/payments-service && npm install && npm run build
-    startCommand: cd services/payments-service && npm run start
+    plan: free
+    region: oregon
+    rootDir: services/payments-service
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 3003
+      - key: PAYMENTS_DATABASE_SCHEMA
+        value: payments
+      - key: QUOTES_INTERNAL_URL
+        value: https://element-quotes.onrender.com
+      - key: INTERNAL_API_KEY
+        value: element-internal-key
 
-  - type: pserv
+  - type: web
     name: element-config
     runtime: node
-    plan: standard
-    buildCommand: cd services/config-service && npm install && npm run build
-    startCommand: cd services/config-service && npm run start
+    plan: free
+    region: oregon
+    rootDir: services/config-service
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 3004
+      - key: CONFIG_DATABASE_SCHEMA
+        value: config
 
-  - type: pserv
+  - type: web
     name: element-catalog
     runtime: node
-    plan: standard
-    buildCommand: cd services/catalog-service && npm install && npm run build
-    startCommand: cd services/catalog-service && npm run start
+    plan: free
+    region: oregon
+    rootDir: services/catalog-service
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 3005
+      - key: CATALOG_DATABASE_SCHEMA
+        value: catalog
 
-  - type: pserv
+  - type: web
     name: element-public
     runtime: node
-    plan: standard
-    buildCommand: cd services/public-service && npm install && npm run build
-    startCommand: cd services/public-service && npm run start
+    plan: free
+    region: oregon
+    rootDir: services/public-service
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 3006
+      - key: PUBLIC_DATABASE_SCHEMA
+        value: site
 
-  - type: pserv
+  - type: web
     name: element-tile
     runtime: node
-    plan: standard
-    buildCommand: cd services/tile-calculator-service && npm install && npm run build
-    startCommand: cd services/tile-calculator-service && npm run start
+    plan: free
+    region: oregon
+    rootDir: services/tile-calculator-service
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 3007
+      - key: TILE_CALCULATOR_DATABASE_SCHEMA
+        value: tile_calculator

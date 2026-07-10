@@ -23,8 +23,6 @@ export class SelectShopDto {
 }
 
 export class ResetPasswordDto {
+  @IsString() @MinLength(6) @MaxLength(100) @Matches(PASSWORD_REGEX, { message: 'La contraseña debe tener al menos una mayúscula, una minúscula y un número' }) old_password: string;
   @IsString() @MinLength(6) @MaxLength(100) @Matches(PASSWORD_REGEX, { message: 'La contraseña debe tener al menos una mayúscula, una minúscula y un número' }) new_password: string;
-  @IsString() @MaxLength(60) @Matches(SLUG_REGEX, { message: 'El slug de tienda solo puede contener letras minúsculas, números y guiones' }) shop_slug: string;
-  @IsOptional() @IsEmail() @MaxLength(120) email?: string;
-  @IsOptional() @IsString() @MaxLength(30) phone?: string;
 }

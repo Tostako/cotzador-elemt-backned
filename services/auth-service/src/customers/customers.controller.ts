@@ -10,8 +10,12 @@ export class CustomersController {
   constructor(@InjectRepository(Customer) private readonly customers: Repository<Customer>) {}
 
   @Patch('me')
-  async updateMe(@CurrentUser('customer_id') id: string, @Body() dto: UpdateProfileDto) {
-    await this.customers.update(id, dto);
-    return this.customers.findOne({ where: { id } });
+  async updateMe(
+    @CurrentUser('customer_id') id: string,
+    @CurrentUser('shop_id') shopId: string,
+    @Body() dto: UpdateProfileDto,
+  ) {
+    await this.customers.update({ id, shop_id: shopId }, dto);
+    return this.customers.findOne({ where: { id, shop_id: shopId } });
   }
 }
