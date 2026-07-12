@@ -26,3 +26,11 @@ export class ResetPasswordDto {
   @IsString() @MinLength(6) @MaxLength(100) @Matches(PASSWORD_REGEX, { message: 'La contraseña debe tener al menos una mayúscula, una minúscula y un número' }) old_password: string;
   @IsString() @MinLength(6) @MaxLength(100) @Matches(PASSWORD_REGEX, { message: 'La contraseña debe tener al menos una mayúscula, una minúscula y un número' }) new_password: string;
 }
+
+export class RefreshTokenDto {
+  @IsOptional() @IsString() @MaxLength(2048) refresh_token?: string;
+}
+
+export class LogoutDto {
+  @IsOptional() @IsString() @MaxLength(2048) refresh_token?: string;
+}

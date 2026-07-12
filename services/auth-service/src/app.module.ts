@@ -5,7 +5,9 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtAuthGuard } from './common/jwt-auth.guard';
 import { Shop } from './entities/shop.entity';
 import { Customer } from './entities/customer.entity';
+import { RefreshToken } from './entities/refresh-token.entity';
 import { AuthModule } from './auth/auth.module';
+
 import { CustomersModule } from './customers/customers.module';
 import { HealthModule } from './health/health.module';
 
@@ -18,7 +20,7 @@ import { HealthModule } from './health/health.module';
         type: 'postgres',
         url: config.get<string>('DATABASE_URL') || config.get<string>('SUPABASE_DATABASE_URL'),
         schema: config.get<string>('DATABASE_SCHEMA') || config.get<string>('AUTH_DATABASE_SCHEMA') || undefined,
-        entities: [Shop, Customer],
+        entities: [Shop, Customer, RefreshToken],
         synchronize: false,
         retryAttempts: 3,
         retryDelay: 3000,
