@@ -1,6 +1,6 @@
 -- ============================================================
 -- auth_db — Auth & Tenant Service
--- Tablas: shops (tenant raíz) + customers (con auth)
+-- Tablas: shops (tenant raíz) + customers (con auth) + refresh_tokens
 -- ============================================================
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS citext;
@@ -49,6 +49,28 @@ CREATE TRIGGER customers_updated_at BEFORE UPDATE ON customers
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 CREATE INDEX idx_customers_shop_id    ON customers(shop_id);
 CREATE INDEX idx_customers_shop_email ON customers(shop_id, email);
+
+CREATE TABLE refresh_tokens (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  customer_id UUID         NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  shop_id     UUID         NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+  token_hash  VARCHAR(255) NOT NULL UNIQUE,
+  jti         UUID         NOT NULL UNIQUE,
+  issued_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  expires_at  TIMESTAMPTZ  NOT NULL,
+  revoked_at  TIMESTAMPTZ,
+  replaced_by UUID         REFERENCES refresh_tokens(id) ON DELETE SET NULL,
+  ip_address  VARCHAR(45),
+  user_agent  TEXT,
+  created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE TRIGGER refresh_tokens_updated_at BEFORE UPDATE ON refresh_tokens
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE INDEX idx_refresh_tokens_customer_id ON refresh_tokens(customer_id);
+CREATE INDEX idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
+CREATE INDEX idx_refresh_tokens_jti ON refresh_tokens(jti);
+CREATE INDEX idx_refresh_tokens_expires_at ON refresh_tokens(expires_at);
 
 -- Tienda de ejemplo (slug por defecto del frontend)
 INSERT INTO shops (name, slug, email) VALUES ('Elemet Haus', 'elemet-haus', 'admin@elemet-haus.com')

@@ -86,6 +86,8 @@ const PUBLIC_PATHS = [
   new RegExp(`^(${PREFIX})?/public/`),
   new RegExp(`^(${PREFIX})?/auth/customer/register$`),
   new RegExp(`^(${PREFIX})?/auth/customer/login$`),
+  new RegExp(`^(${PREFIX})?/auth/customer/refresh$`),
+  new RegExp(`^(${PREFIX})?/auth/customer/logout$`),
 ];
 
 function isPublicPath(path: string): boolean {

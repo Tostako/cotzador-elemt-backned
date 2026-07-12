@@ -7,14 +7,17 @@
 # los servicios manualmente uno por uno con los mismos Build/Start Commands.
 #
 # ANTES DE DESPLEGAR:
-# 1. Editá el envVarGroup `element-secrets` con tu JWT_SECRET y SUPABASE_DATABASE_URL reales.
-# 2. Si usás Blueprint, JWT_SECRET debe ser el MISMO en gateway y todos los servicios.
+# 1. Editá el envVarGroup `element-secrets` con tu JWT_SECRET, JWT_REFRESH_SECRET y SUPABASE_DATABASE_URL reales.
+# 2. JWT_SECRET debe ser el MISMO en gateway y todos los servicios.
+# 3. JWT_REFRESH_SECRET solo lo usa auth-service y debe ser diferente de JWT_SECRET.
 
 envVarGroups:
   - name: element-secrets
     envVars:
       - key: JWT_SECRET
         value: cambia-esto-por-un-secreto-largo-y-seguro
+      - key: JWT_REFRESH_SECRET
+        value: cambia-esto-por-otro-secreto-largo-y-seguro
       - key: SUPABASE_DATABASE_URL
         value: postgresql://postgres.ktmsemzpnpvlcyxjtqlf:TU_PASSWORD@aws-1-us-east-1.pooler.supabase.com:5432/postgres
 
@@ -67,6 +70,10 @@ services:
         value: 3001
       - key: AUTH_DATABASE_SCHEMA
         value: element_auth
+      - key: JWT_EXPIRES_IN
+        value: 1d
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 7d
       - fromGroup: element-secrets
 
   - type: web
