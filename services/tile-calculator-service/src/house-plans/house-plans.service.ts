@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { HousePlan } from '../entities/house-plan.entity';
 import { TileProject } from '../entities/tile-project.entity';
 import { GuardaescobasProject } from '../entities/guardaescobas-project.entity';
+import { CornisasProject } from '../entities/cornisas-project.entity';
 import { CreateHousePlanDto, UpdateHousePlanDto, ImportProjectDto } from './house-plans.dto';
 
 interface Ctx { shop_id: string; customer_id: string; }
@@ -14,6 +15,7 @@ export class HousePlansService {
     @InjectRepository(HousePlan) private readonly plans: Repository<HousePlan>,
     @InjectRepository(TileProject) private readonly tileProjects: Repository<TileProject>,
     @InjectRepository(GuardaescobasProject) private readonly guardaescobasProjects: Repository<GuardaescobasProject>,
+    @InjectRepository(CornisasProject) private readonly cornisasProjects: Repository<CornisasProject>,
   ) {}
 
   async findAll(ctx: Ctx): Promise<HousePlan[]> {
@@ -116,6 +118,30 @@ export class HousePlansService {
     if (!project) throw new NotFoundException('Proyecto de guarda escobas no encontrado');
     project.niveles = this.normalizeNiveles(plan.niveles);
     return this.guardaescobasProjects.save(project);
+  }
+
+  async importToCornisas(ctx: Ctx, planId: string, dto: ImportProjectDto): Promise<CornisasProject> {
+    const plan = await this.findOne(ctx, planId);
+    const project = this.cornisasProjects.create({
+      shop_id: ctx.shop_id,
+      customer_id: ctx.customer_id,
+      house_plan_id: plan.id,
+      nombre: dto.nombre,
+      niveles: this.normalizeNiveles(plan.niveles),
+      materiales: [],
+      resultados: {},
+    });
+    return this.cornisasProjects.save(project);
+  }
+
+  async syncToCornisas(ctx: Ctx, planId: string, projectId: string): Promise<CornisasProject> {
+    const plan = await this.findOne(ctx, planId);
+    const project = await this.cornisasProjects.findOne({
+      where: { id: projectId, shop_id: ctx.shop_id, customer_id: ctx.customer_id },
+    });
+    if (!project) throw new NotFoundException('Proyecto de cornisas no encontrado');
+    project.niveles = this.normalizeNiveles(plan.niveles);
+    return this.cornisasProjects.save(project);
   }
 
   private normalizeNiveles(niveles: any[]): any[] {
