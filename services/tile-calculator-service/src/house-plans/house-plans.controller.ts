@@ -60,4 +60,20 @@ export class HousePlansController {
   ) {
     return this.service.syncToGuardaescobas(this.ctx(u), id, projectId);
   }
+
+  @Post(':id/import-to-cornisas') importToCornisas(
+    @CurrentUser() u: CurrentUserData,
+    @Param('id') id: string,
+    @Body() dto: ImportProjectDto,
+  ) {
+    return this.service.importToCornisas(this.ctx(u), id, dto);
+  }
+
+  @Post(':id/sync-to-cornisas/:projectId') syncToCornisas(
+    @CurrentUser() u: CurrentUserData,
+    @Param('id') id: string,
+    @Param('projectId') projectId: string,
+  ) {
+    return this.service.syncToCornisas(this.ctx(u), id, projectId);
+  }
 }

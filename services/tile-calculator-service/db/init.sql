@@ -27,3 +27,22 @@ CREATE INDEX idx_tile_projects_created ON tile_projects(shop_id, customer_id, cr
 -- Índices GIN para consultas dentro de los documentos JSONB
 CREATE INDEX idx_tile_projects_niveles_gin ON tile_projects USING GIN (niveles jsonb_path_ops);
 CREATE INDEX idx_tile_projects_materiales_gin ON tile_projects USING GIN (materiales jsonb_path_ops);
+
+CREATE TABLE cornisas_projects (
+  id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  shop_id          UUID         NOT NULL,
+  customer_id      UUID         NOT NULL,
+  house_plan_id    UUID,
+  nombre           VARCHAR(255) NOT NULL,
+  niveles          JSONB        NOT NULL DEFAULT '[]',
+  materiales       JSONB        NOT NULL DEFAULT '[]',
+  resultados       JSONB        NOT NULL DEFAULT '{}',
+  created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE TRIGGER cornisas_projects_updated_at BEFORE UPDATE ON cornisas_projects
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE INDEX idx_cornisas_projects_owner ON cornisas_projects(shop_id, customer_id);
+CREATE INDEX idx_cornisas_projects_created ON cornisas_projects(shop_id, customer_id, created_at DESC);
+CREATE INDEX idx_cornisas_projects_niveles_gin ON cornisas_projects USING GIN (niveles jsonb_path_ops);
+CREATE INDEX idx_cornisas_projects_materiales_gin ON cornisas_projects USING GIN (materiales jsonb_path_ops);
