@@ -27,6 +27,16 @@ async function bootstrap() {
   app.useGlobalInterceptors(new LoggingInterceptor(), new ResponseInterceptor());
   app.useGlobalFilters(new AllExceptionsFilter());
 
+  // Health check de la raíz para Render: devuelve 200 para que el servicio no
+  // se reinicie en bucle cuando Render verifica '/'.
+  const httpAdapter = app.getHttpAdapter();
+  httpAdapter.get('/', (_req, res) => res.status(200).json({
+    status: 'ok',
+    service: 'auth-service',
+    timestamp: new Date().toISOString(),
+  }));
+  httpAdapter.head('/', (_req, res) => res.status(200).end());
+
   const port = process.env.PORT ?? 3001;
   await app.listen(port);
   // eslint-disable-next-line no-console
