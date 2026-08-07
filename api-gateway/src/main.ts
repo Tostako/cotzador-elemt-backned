@@ -47,6 +47,7 @@ const targets = {
   catalog: process.env.CATALOG_URL ?? 'http://127.0.0.1:3005',
   public: process.env.PUBLIC_URL ?? 'http://127.0.0.1:3006',
   tileCalculator: process.env.TILE_CALCULATOR_URL ?? 'http://127.0.0.1:3007',
+  costos: process.env.COSTOS_URL ?? 'http://127.0.0.1:3008',
 };
 
 /**
@@ -257,6 +258,7 @@ const concurrentRequests: Record<string, number> = {
   catalog: 0,
   public: 0,
   tileCalculator: 0,
+  costos: 0,
 };
 
 function acquireSlot(serviceName: string, res: Response): boolean {
@@ -350,6 +352,9 @@ app.use(route('public', targets.public, (path) => prefixed('public').test(path))
 
 // Tile Calculator: /tile-calculator/*
 app.use(route('tile-calculator', targets.tileCalculator, (path) => prefixed('tile-calculator').test(path)));
+
+// CostPro: /costos/*
+app.use(route('costos', targets.costos, (path) => prefixed('costos').test(path)));
 
 app.use((_req, res) => res.status(404).json({ error: 'Ruta no encontrada en el gateway' }));
 
