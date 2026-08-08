@@ -149,6 +149,43 @@ export class CostEngine {
   }
 
   /**
+   * Costo de una propuesta de componentes (para impacto de edición de APU).
+   * Igual que costoApu pero en lugar de leer de BD usa la entrada propuesta.
+   */
+  async costoDeComponentes(
+    componentes: Array<{ insumo_id: string; rendimiento: number }>,
+    fecha?: Date,
+  ): Promise<{ costo_unitario: Dinero; avisos: Aviso[] }> {
+    const ids = [...new Set(componentes.map((c) => c.insumo_id))];
+    const insumos = ids.length ? await this.supplyRepo.findByIds(ids) : [];
+    const avisos: Aviso[] = [];
+    let total = 0;
+
+    for (const comp of componentes) {
+      const insumo = insumos.find((s) => s.id === comp.insumo_id);
+      if (!insumo) {
+        avisos.push({
+          tipo: 'ERROR',
+          codigo: 'INSUMO_INVALIDO',
+          mensaje: 'La propuesta incluye un insumo que no existe',
+        });
+        continue;
+      }
+      const precio = await this.precioVigente(comp.insumo_id, fecha);
+      const subtotal = Math.round(toCents(precio.valor) * parseCantidad(comp.rendimiento)) / 100;
+      total += toCents(fromCents(Math.round(toCents(precio.valor) * parseCantidad(comp.rendimiento) * 100) / 100));
+      if (!precio.existe) {
+        avisos.push({
+          tipo: 'ADVERTENCIA',
+          codigo: 'INSUMO_SIN_PRECIO',
+          mensaje: `El insumo "${insumo.descripcion}" no tiene precio; se usa 0.00`,
+        });
+      }
+    }
+    return { costo_unitario: fromCents(total), avisos };
+  }
+
+  /**
    * Desglose maestro de un proyecto: items, subtotales por capítulo, costo
    * directo, AIU, IVA y total. Cálculo siempre desde los snapshots congelados.
    */

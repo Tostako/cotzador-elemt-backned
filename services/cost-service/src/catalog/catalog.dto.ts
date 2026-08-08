@@ -112,3 +112,10 @@ export class UpdateApuDto {
   @IsOptional()
   componentes?: ComponenteDto[];
 }
+
+export class DuplicarApuDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  descripcion: string;
+}

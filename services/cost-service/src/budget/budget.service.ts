@@ -125,8 +125,8 @@ export class BudgetService {
     for (const comp of componentes) {
       const insumo = insumos.find((s) => s.id === comp.insumo_id);
       const precio = await this.costEngine.precioVigente(comp.insumo_id);
-      const subtotal = Math.round(toCents(precio.valor) * parseFloat(comp.rendimiento) * 100) / 100;
-      costo += subtotal * 100;
+      const subtotalCents = Math.round(toCents(precio.valor) * parseFloat(comp.rendimiento));
+      costo += subtotalCents;
 
       if (!precio.existe) {
         avisos.push({
@@ -149,11 +149,11 @@ export class BudgetService {
         grupo: insumo?.grupo ?? '',
         rendimiento: comp.rendimiento,
         valor: precio.valor,
-        subtotal: fromCents(subtotal * 100),
+        subtotal: fromCents(subtotalCents),
       });
     }
 
-    const valorUnitario = fromCents(Math.round(costo / 100));
+    const valorUnitario = fromCents(costo);
 
     const antes = await this.snapState(project.id, project.version);
     const item = this.itemRepo.create({

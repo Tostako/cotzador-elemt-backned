@@ -19,6 +19,8 @@ import { BudgetModule } from './budget/budget.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { DocumentsModule } from './documents/documents.module';
 import { CostEngineModule } from './cost-engine/cost-engine.module';
+import { TemplatesModule } from './templates/templates.module';
+import { AiModule } from './ai/ai.module';
 import { HealthModule } from './health/health.module';
 
 @Module({
@@ -50,6 +52,8 @@ import { HealthModule } from './health/health.module';
     BudgetModule,
     AnalyticsModule,
     DocumentsModule,
+    TemplatesModule,
+    AiModule,
     HealthModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: JwtAuthGuard }],

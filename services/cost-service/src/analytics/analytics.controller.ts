@@ -1,15 +1,19 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Headers,
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Query,
   Res,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { CurrentUser, CurrentUserData } from '../common/current-user.decorator';
 import { AnalyticsService } from './analytics.service';
+
+const GRUPOS = ['MATERIAL', 'MANO_OBRA', 'EQUIPO', 'TRANSPORTE'];
 
 @Controller('costos/analytics')
 export class AnalyticsController {
@@ -40,5 +44,36 @@ export class AnalyticsController {
     @Param('projectId', ParseUUIDPipe) projectId: string,
   ) {
     return this.analyticsService.porCapitulos(user.shop_id, user.customer_id, projectId);
+  }
+
+  @Get('projects/:projectId/consolidated')
+  consolidado(
+    @CurrentUser() user: CurrentUserData,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Query('grupo') grupo: string,
+  ) {
+    if (!grupo || !GRUPOS.includes(grupo)) {
+      throw new BadRequestException({
+        error: 'GRUPO_INVALIDO',
+        mensaje: 'El grupo debe ser MATERIAL, MANO_OBRA, EQUIPO o TRANSPORTE',
+      });
+    }
+    return this.analyticsService.consolidado(user.shop_id, user.customer_id, projectId, grupo as any);
+  }
+
+  @Get('projects/:projectId/cost-intelligence')
+  costIntelligence(
+    @CurrentUser() user: CurrentUserData,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+  ) {
+    return this.analyticsService.costIntelligence(user.shop_id, user.customer_id, projectId);
+  }
+
+  @Get('projects/:projectId/alerts')
+  alerts(
+    @CurrentUser() user: CurrentUserData,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+  ) {
+    return this.analyticsService.alerts(user.shop_id, user.customer_id, projectId);
   }
 }

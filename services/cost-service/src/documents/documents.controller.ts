@@ -34,14 +34,29 @@ export class DocumentsController {
     return this.documentsService.obtenerEstado(user.shop_id, user.customer_id, docId);
   }
 
+  @Get('documents/:docId/download')
+  @Header('Content-Disposition', 'attachment')
+  async descargarDownload(
+    @CurrentUser() user: CurrentUserData,
+    @Param('docId', ParseUUIDPipe) docId: string,
+  ): Promise<StreamableFile> {
+    return this.descargar(user, docId);
+  }
+
   @Get('documents/:docId/file')
-  @Header('Content-Type', 'application/pdf')
+  @Header('Content-Disposition', 'attachment')
   async descargar(
     @CurrentUser() user: CurrentUserData,
     @Param('docId', ParseUUIDPipe) docId: string,
   ): Promise<StreamableFile> {
     const doc = await this.documentsService.obtenerEstado(user.shop_id, user.customer_id, docId);
     const path = this.documentsService.rutaArchivo(doc.file_path!);
-    return new StreamableFile(createReadStream(path));
+    if (path.endsWith('.xlsx')) {
+      return new StreamableFile(createReadStream(path), {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        disposition: `attachment; filename="presupuesto-${doc.referencia ?? doc.id}.xlsx"`,
+      });
+    }
+    return new StreamableFile(createReadStream(path), { type: 'application/pdf' });
   }
 }

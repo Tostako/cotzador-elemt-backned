@@ -49,13 +49,20 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = 'Error interno del servidor';
+    let codigo: string | undefined;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
-      const body = exception.getResponse() as string | { message?: string | string[] };
-      const raw = typeof body === 'string' ? body : body.message ?? message;
-      const joined = Array.isArray(raw) ? raw.join(', ') : raw;
-      message = humanizeValidation(joined);
+      const body = exception.getResponse() as
+        | string
+        | { message?: string | string[]; mensaje?: string; codigo?: string; error?: string };
+      if (typeof body === 'object' && body !== null) {
+        if (typeof body.mensaje === 'string') message = body.mensaje;
+        else if (typeof body.message === 'string') message = humanizeValidation(body.message);
+        else if (Array.isArray(body.message)) message = humanizeValidation(body.message.join(', '));
+        if (typeof body.codigo === 'string') codigo = body.codigo;
+        else if (typeof body.error === 'string') codigo = body.error;
+      }
     } else if (exception instanceof Error) {
       this.logger.error(`[${requestId}] ${exception.message}`, exception.stack);
     }
@@ -66,6 +73,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       error: message,
       requestId,
       timestamp: new Date().toISOString(),
+      ...(codigo ? { codigo } : {}),
     });
   }
 }

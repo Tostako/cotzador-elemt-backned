@@ -6,7 +6,16 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 
-export type TipoDocumento = 'COTIZACION' | 'FACTURA_PROFORMA' | 'ORDEN_COMPRA';
+export type TipoDocumento =
+  | 'COTIZACION'
+  | 'FACTURA_PROFORMA'
+  | 'ORDEN_COMPRA'
+  | 'PDF_CLIENTE'
+  | 'PDF_INTERNO'
+  | 'PDF_COSTOS_APU'
+  | 'XLSX_PRESUPUESTO'
+  | 'XLSX_INSUMOS'
+  | 'XLSX_APUS';
 export type EstadoDocumento = 'GENERANDO' | 'LISTO' | 'ERROR' | 'OBSOLETO';
 
 @Entity('documents')

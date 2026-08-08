@@ -2,14 +2,30 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  ConflictException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Chapter } from '../entities/chapter.entity';
 import { Apu, OrigenApu } from '../entities/apu.entity';
 import { ApuComponent } from '../entities/apu-component.entity';
+import { BudgetItem } from '../entities/budget-item.entity';
+import { Project } from '../entities/project.entity';
+import { Supply } from '../entities/supply.entity';
 import { CostEngine } from '../cost-engine/cost-engine.service';
-import { CreateChapterDto, UpdateChapterDto, CreateApuDto, UpdateApuDto } from './catalog.dto';
+import { fromCents, toCents } from '../common/money';
+import {
+  CreateChapterDto,
+  UpdateChapterDto,
+  CreateApuDto,
+  UpdateApuDto,
+  DuplicarApuDto,
+} from './catalog.dto';
+import {
+  firmarConfirmacion,
+  confirmacionValidaParaDatos,
+} from '../common/confirmation-token';
 
 @Injectable()
 export class CatalogService {
@@ -17,6 +33,9 @@ export class CatalogService {
     @InjectRepository(Chapter) private readonly chapterRepo: Repository<Chapter>,
     @InjectRepository(Apu) private readonly apuRepo: Repository<Apu>,
     @InjectRepository(ApuComponent) private readonly componentRepo: Repository<ApuComponent>,
+    @InjectRepository(BudgetItem) private readonly itemRepo: Repository<BudgetItem>,
+    @InjectRepository(Project) private readonly projectRepo: Repository<Project>,
+    @InjectRepository(Supply) private readonly supplyRepo: Repository<Supply>,
     private readonly costEngine: CostEngine,
   ) {}
 
@@ -185,5 +204,175 @@ export class CatalogService {
     apu.deleted_at = new Date();
     await this.apuRepo.save(apu);
     return { ok: true };
+  }
+
+  /** Fuente única de contadores del catálogo (decisión H-13, HU-09). */
+  async counters(shopId: string, projectId?: string) {
+    const apusCatalogo = await this.apuRepo.count({
+      where: { shop_id: shopId, deleted_at: null },
+    });
+    const apusPersonalizados = await this.apuRepo.count({
+      where: { shop_id: shopId, origen: OrigenApu.PERSONALIZADO, deleted_at: null },
+    });
+    const insumosCatalogo = await this.supplyRepo.count({ where: { shop_id: shopId } });
+
+    let apusEnProyecto = 0;
+    if (projectId) {
+      apusEnProyecto = await this.itemRepo.count({
+        where: { project_id: projectId, deleted_at: null },
+      });
+    }
+
+    return {
+      apus_catalogo: apusCatalogo,
+      apus_en_proyecto: apusEnProyecto,
+      apus_personalizados: apusPersonalizados,
+      insumos_catalogo: insumosCatalogo,
+      computed_at: new Date().toISOString(),
+    };
+  }
+
+  // ---- Fase 2: duplicar APU (HU-12) ---------------------------------------
+
+  async duplicarApu(shopId: string, id: string, dto: DuplicarApuDto) {
+    const origen = await this.apuRepo.findOne({ where: { id, shop_id: shopId, deleted_at: null } });
+    if (!origen) throw new NotFoundException('APU no encontrado');
+    if (origen.descripcion === dto.descripcion) {
+      throw new BadRequestException({
+        error: 'APU_DESCRIPCION_IGUAL',
+        mensaje: 'La descripción de la copia debe diferir del original',
+      });
+    }
+
+    // Código: derivado del original con sufijo, probando colisiones.
+    const base = origen.codigo.slice(0, 26);
+    let codigo = `${base}-2`;
+    let sufijo = 2;
+    for (;;) {
+      const existe = await this.apuRepo.findOne({
+        where: { shop_id: shopId, codigo, deleted_at: null },
+      });
+      if (!existe) break;
+      sufijo += 1;
+      codigo = `${base}-${sufijo}`;
+    }
+
+    const apu = this.apuRepo.create({
+      shop_id: shopId,
+      chapter_id: origen.chapter_id,
+      codigo,
+      descripcion: dto.descripcion,
+      unidad: origen.unidad,
+      origen: OrigenApu.PERSONALIZADO,
+      version: 1,
+    });
+    const saved = await this.apuRepo.save(apu);
+
+    const componentes = await this.componentRepo.find({ where: { apu_id: origen.id } });
+    if (componentes.length) {
+      const copias = componentes.map((c) =>
+        this.componentRepo.create({
+          apu_id: saved.id,
+          insumo_id: c.insumo_id,
+          rendimiento: c.rendimiento,
+        }),
+      );
+      await this.componentRepo.save(copias);
+    }
+
+    return this.obtenerApu(shopId, saved.id);
+  }
+
+  // ---- Fase 2: impacto de edición de APU (HU-11) -----------------------
+
+  /** Conteo de proyectos/presupuestos que usan el APU. */
+  private async usoProyectos(apuId: string): Promise<{
+    proyectosActivos: number;
+    borrador: number;
+    aprobado: number;
+  }> {
+    const items = await this.itemRepo.find({ where: { apu_id: apuId } });
+    if (!items.length) return { proyectosActivos: 0, borrador: 0, aprobado: 0 };
+
+    const ids = [...new Set(items.map((i) => i.project_id))];
+    const proyectos = ids.length
+      ? await this.projectRepo.find({ where: { id: In(ids), deleted_at: null } })
+      : [];
+    const activos = proyectos.filter((p) => p.estado !== 'ARCHIVADO');
+    return {
+      proyectosActivos: activos.length,
+      borrador: proyectos.filter((p) => p.estado === 'BORRADOR').length,
+      aprobado: proyectos.filter((p) => p.estado === 'APROBADO').length,
+    };
+  }
+
+  /** Impacto de una edición propuesta (o simple consulta). Devuelve token si hay cambios. */
+  async impactoApu(shopId: string, id: string, dto?: UpdateApuDto) {
+    const apu = await this.apuRepo.findOne({ where: { id, shop_id: shopId, deleted_at: null } });
+    if (!apu) throw new NotFoundException('APU no encontrado');
+
+    const uso = await this.usoProyectos(id);
+    const actual = await this.costEngine.costoApu(id);
+
+    let variacionUnitaria = '0.00';
+    let confirmationToken: string | null = null;
+
+    if (dto && dto.componentes !== undefined) {
+      const propuesta = await this.costEngine.costoDeComponentes(dto.componentes);
+      const diff = Math.round(toCents(propuesta.costo_unitario) - toCents(actual.costo_unitario));
+      variacionUnitaria = fromCents(diff);
+      if (diff !== 0) {
+        confirmationToken = firmarConfirmacion('APU_EDIT', shopId, id, dto);
+      }
+    }
+
+    return {
+      proyectos_activos: uso.proyectosActivos,
+      presupuestos_borrador: uso.borrador,
+      presupuestos_aprobados: uso.aprobado,
+      variacion_unitaria: variacionUnitaria,
+      confirmation_token: confirmationToken,
+    };
+  }
+
+  /**
+   * Aplica una edición de APU con confirmación de impacto. Si dryRun=true
+   * devuelve sólo el análisis con token; si viene X-Confirmation-Token válido
+   * para los mismos datos, aplica.
+   */
+  async editarApuConImpacto(
+    shopId: string,
+    id: string,
+    dto: UpdateApuDto,
+    dryRun?: boolean,
+    confirmationToken?: string,
+  ) {
+    const apu = await this.apuRepo.findOne({ where: { id, shop_id: shopId, deleted_at: null } });
+    if (!apu) throw new NotFoundException('APU no encontrado');
+
+    const impacto = await this.impactoApu(shopId, id, dto);
+
+    // Sin diferencia de costo → se aplica directo.
+    if (impacto.confirmation_token === null) {
+      return this.actualizarApu(shopId, id, dto);
+    }
+
+    if (dryRun) {
+      return { dry_run: true, ...impacto, confirmado: false };
+    }
+
+    if (!confirmacionValidaParaDatos(confirmationToken, 'APU_EDIT', shopId, id, dto)) {
+      throw new UnprocessableEntityException({
+        error: 'CONFIRMACION_REQUERIDA',
+        mensaje:
+          'Esta edición cambia el costo del APU. Llame primero con dryRun=true y envíe el X-Confirmation-Token devuelto.',
+        impacto: {
+          proyectos_activos: impacto.proyectos_activos,
+          variacion_unitaria: impacto.variacion_unitaria,
+        },
+      });
+    }
+
+    return this.actualizarApu(shopId, id, dto);
   }
 }

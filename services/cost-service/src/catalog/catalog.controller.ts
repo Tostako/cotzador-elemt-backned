@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -16,6 +17,7 @@ import {
   UpdateChapterDto,
   CreateApuDto,
   UpdateApuDto,
+  DuplicarApuDto,
 } from './catalog.dto';
 
 @Controller('costos')
@@ -53,6 +55,14 @@ export class CatalogController {
 
   // ---- APUs ---------------------------------------------------------------
 
+  @Get('catalog/counters')
+  counters(
+    @CurrentUser() user: CurrentUserData,
+    @Query('projectId') projectId?: string,
+  ) {
+    return this.catalogService.counters(user.shop_id, projectId);
+  }
+
   @Get('apus')
   listarApus(
     @CurrentUser() user: CurrentUserData,
@@ -79,8 +89,33 @@ export class CatalogController {
     @CurrentUser() user: CurrentUserData,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateApuDto,
+    @Query('dryRun') dryRun?: string,
+    @Headers('x-confirmation-token') confirmationToken?: string,
   ) {
-    return this.catalogService.actualizarApu(user.shop_id, id, dto);
+    return this.catalogService.editarApuConImpacto(
+      user.shop_id,
+      id,
+      dto,
+      dryRun === 'true' || dryRun === '1',
+      confirmationToken,
+    );
+  }
+
+  @Get('apus/:id/impact')
+  impactoApu(
+    @CurrentUser() user: CurrentUserData,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.catalogService.impactoApu(user.shop_id, id);
+  }
+
+  @Post('apus/:id/duplicate')
+  duplicarApu(
+    @CurrentUser() user: CurrentUserData,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: DuplicarApuDto,
+  ) {
+    return this.catalogService.duplicarApu(user.shop_id, id, dto);
   }
 
   @Delete('apus/:id')
