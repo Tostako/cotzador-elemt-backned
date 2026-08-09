@@ -8,11 +8,12 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
 } from '@nestjs/common';
 import { CurrentUser, CurrentUserData } from '../common/current-user.decorator';
 import { ProjectsService } from './projects.service';
-import { CreateProjectDto, ListProjectsQueryDto, UpdateProjectDto } from './projects.dto';
+import { AiuConfigDto, CreateProjectDto, ListProjectsQueryDto, UpdateProjectDto } from './projects.dto';
 
 @Controller('costos/projects')
 export class ProjectsController {
@@ -52,6 +53,32 @@ export class ProjectsController {
     @Headers('if-match') ifMatch?: string,
   ) {
     return this.projectsService.actualizar(user.shop_id, user.customer_id, id, dto, ifMatch);
+  }
+
+  @Patch(':id/aiu')
+  actualizarAiu(
+    @CurrentUser() user: CurrentUserData,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AiuConfigDto,
+  ) {
+    return this.projectsService.actualizarAiu(user.shop_id, user.customer_id, id, dto);
+  }
+
+  @Get(':id/aiu')
+  obtenerAiu(
+    @CurrentUser() user: CurrentUserData,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.projectsService.obtenerAiu(user.shop_id, user.customer_id, id);
+  }
+
+  @Put(':id/aiu')
+  guardarAiu(
+    @CurrentUser() user: CurrentUserData,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AiuConfigDto,
+  ) {
+    return this.projectsService.actualizarAiu(user.shop_id, user.customer_id, id, dto);
   }
 
   @Delete(':id')

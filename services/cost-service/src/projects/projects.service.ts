@@ -6,7 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Project, EstadoProyecto } from '../entities/project.entity';
-import { CreateProjectDto, UpdateProjectDto } from './projects.dto';
+import { AiuConfigDto, CreateProjectDto, UpdateProjectDto } from './projects.dto';
 
 @Injectable()
 export class ProjectsService {
@@ -99,6 +99,18 @@ export class ProjectsService {
 
     project.version = project.version + 1;
     return this.projectRepo.save(project);
+  }
+
+  async actualizarAiu(shopId: string, customerId: string, id: string, dto: AiuConfigDto) {
+    const project = await this.obtener(shopId, customerId, id);
+    project.aiu = { ...project.aiu, ...dto };
+    project.version = project.version + 1;
+    return this.projectRepo.save(project);
+  }
+
+  async obtenerAiu(shopId: string, customerId: string, id: string) {
+    const project = await this.obtener(shopId, customerId, id);
+    return project.aiu;
   }
 
   async eliminar(shopId: string, customerId: string, id: string) {
