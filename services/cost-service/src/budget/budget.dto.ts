@@ -1,4 +1,6 @@
 import {
+  IsArray,
+  ArrayMinSize,
   IsBoolean,
   IsNumber,
   IsOptional,
@@ -6,7 +8,9 @@ import {
   IsUUID,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class AddItemDto {
   @IsUUID()
@@ -45,4 +49,27 @@ export class ValidateBudgetDto {
   @IsBoolean()
   @IsOptional()
   incluir_avisos?: boolean;
+}
+
+export class EditarApuSnapshotDto {
+  @IsString()
+  @IsOptional()
+  @MaxLength(200)
+  descripcion?: string;
+
+  @IsArray()
+  @IsOptional()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => ComponenteSnapshotDto)
+  componentes?: ComponenteSnapshotDto[];
+}
+
+export class ComponenteSnapshotDto {
+  @IsUUID()
+  insumo_id: string;
+
+  @IsNumber()
+  @Min(0.0001)
+  rendimiento: number;
 }

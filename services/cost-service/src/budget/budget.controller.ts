@@ -3,14 +3,17 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
+  Query,
 } from '@nestjs/common';
 import { CurrentUser, CurrentUserData } from '../common/current-user.decorator';
 import { BudgetService } from './budget.service';
-import { AddItemDto, UpdateItemDto, ValidateBudgetDto } from './budget.dto';
+import { AddItemDto, UpdateItemDto, ValidateBudgetDto, EditarApuSnapshotDto } from './budget.dto';
 
 @Controller('costos/projects/:projectId')
 export class BudgetController {
@@ -50,6 +53,53 @@ export class BudgetController {
     @Param('itemId', ParseUUIDPipe) itemId: string,
   ) {
     return this.budgetService.eliminarItem(user.shop_id, user.customer_id, projectId, itemId, user.email);
+  }
+
+  @Post('budget/items/:itemId/apu/promote')
+  promoverApu(
+    @CurrentUser() user: CurrentUserData,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string,
+    @Query('dryRun') dryRun?: string,
+    @Headers('x-confirmation-token') confirmationToken?: string,
+  ) {
+    return this.budgetService.promoverApu(
+      user.shop_id,
+      user.customer_id,
+      projectId,
+      itemId,
+      user.role,
+      dryRun === 'true' || dryRun === '1',
+      confirmationToken,
+    );
+  }
+
+  @Get('budget/items/:itemId/apu')
+  obtenerApuSnapshot(
+    @CurrentUser() user: CurrentUserData,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string,
+  ) {
+    return this.budgetService.obtenerApuSnapshot(user.shop_id, user.customer_id, projectId, itemId);
+  }
+
+  @Put('budget/items/:itemId/apu')
+  editarApuSnapshot(
+    @CurrentUser() user: CurrentUserData,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string,
+    @Body() dto: EditarApuSnapshotDto,
+    @Headers('if-match') ifMatch?: string,
+  ) {
+    return this.budgetService.editarApuSnapshot(
+      user.shop_id,
+      user.customer_id,
+      projectId,
+      itemId,
+      dto,
+      ifMatch,
+      user.email,
+    );
   }
 
   @Post('budget/validate')
