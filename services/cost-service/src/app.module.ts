@@ -12,6 +12,10 @@ import { ApuComponent } from './entities/apu-component.entity';
 import { BudgetItem } from './entities/budget-item.entity';
 import { BudgetEvent } from './entities/budget-event.entity';
 import { Document } from './entities/document.entity';
+import { Quotation } from './entities/quotation.entity';
+import { QuotationLine } from './entities/quotation-line.entity';
+import { AiApuProposal } from './entities/ai-apu-proposal.entity';
+import { OrgBranding } from './entities/org-branding.entity';
 import { ProjectsModule } from './projects/projects.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { SuppliesModule } from './supplies/supplies.module';
@@ -21,6 +25,8 @@ import { DocumentsModule } from './documents/documents.module';
 import { CostEngineModule } from './cost-engine/cost-engine.module';
 import { TemplatesModule } from './templates/templates.module';
 import { AiModule } from './ai/ai.module';
+import { QuotationsModule } from './quotations/quotations.module';
+import { BrandingModule } from './branding/branding.module';
 import { HealthModule } from './health/health.module';
 
 @Module({
@@ -32,7 +38,7 @@ import { HealthModule } from './health/health.module';
         type: 'postgres',
         url: config.get<string>('COST_DATABASE_URL') || config.get<string>('SUPABASE_DATABASE_URL'),
         schema: config.get<string>('COST_DATABASE_SCHEMA') || 'cost_pro',
-        entities: [Project, Chapter, Supply, SupplyPrice, Apu, ApuComponent, BudgetItem, BudgetEvent, Document],
+        entities: [Project, Chapter, Supply, SupplyPrice, Apu, ApuComponent, BudgetItem, BudgetEvent, Document, Quotation, QuotationLine, AiApuProposal, OrgBranding],
         synchronize: false,
         retryAttempts: 3,
         retryDelay: 3000,
@@ -54,6 +60,8 @@ import { HealthModule } from './health/health.module';
     DocumentsModule,
     TemplatesModule,
     AiModule,
+    QuotationsModule,
+    BrandingModule,
     HealthModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: JwtAuthGuard }],

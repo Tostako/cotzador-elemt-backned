@@ -10,3 +10,15 @@ export class ConsultaLocalDto {
   @IsOptional()
   project_id?: string;
 }
+
+export class GenerarPropuestaApuDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  solicitud: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(160)
+  capitulo_sugerido?: string;
+}
