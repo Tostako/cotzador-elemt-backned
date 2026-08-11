@@ -19,7 +19,7 @@ import {
   RecargaMasivaDto,
 } from './supplies.dto';
 
-@Controller('costos/supplies')
+@Controller('costos/catalog/supplies')
 export class SuppliesController {
   constructor(private readonly suppliesService: SuppliesService) {}
 

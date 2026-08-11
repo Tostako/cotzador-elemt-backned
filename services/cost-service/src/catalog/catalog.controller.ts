@@ -24,7 +24,7 @@ import {
   DuplicarApuDto,
 } from './catalog.dto';
 
-@Controller('costos')
+@Controller('costos/catalog')
 export class CatalogController {
   constructor(private readonly catalogService: CatalogService) {}
 
@@ -59,7 +59,7 @@ export class CatalogController {
 
   // ---- APUs ---------------------------------------------------------------
 
-  @Get('catalog/counters')
+  @Get('counters')
   counters(
     @CurrentUser() user: CurrentUserData,
     @Query('projectId') projectId?: string,
@@ -132,7 +132,7 @@ export class CatalogController {
 
   // ---- HU-13: importación masiva -----------------------------------------
 
-  @Post('catalog/apus/import')
+  @Post('apus/import')
   @UseInterceptors(FileInterceptor('archivo'))
   previsualizarImport(
     @CurrentUser() user: CurrentUserData,
@@ -147,7 +147,7 @@ export class CatalogController {
     return this.catalogService.previsualizarImportacion(user.shop_id, file.buffer);
   }
 
-  @Post('catalog/imports/:jobId/confirm')
+  @Post('imports/:jobId/confirm')
   confirmarImport(
     @CurrentUser() user: CurrentUserData,
     @Param('jobId') jobId: string,
