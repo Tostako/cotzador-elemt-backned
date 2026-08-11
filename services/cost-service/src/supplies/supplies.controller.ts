@@ -61,6 +61,15 @@ export class SuppliesController {
     return this.suppliesService.eliminar(user.shop_id, id);
   }
 
+  @Get(':id/usage')
+  uso(
+    @CurrentUser() user: CurrentUserData,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('projectId') projectId?: string,
+  ) {
+    return this.suppliesService.uso(user.shop_id, id, projectId);
+  }
+
   // ---- Precios ------------------------------------------------------------
 
   @Get(':id/prices')

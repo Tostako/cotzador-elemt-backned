@@ -6,12 +6,14 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Project, EstadoProyecto } from '../entities/project.entity';
+import { BudgetItem } from '../entities/budget-item.entity';
 import { AiuConfigDto, CreateProjectDto, UpdateProjectDto } from './projects.dto';
 
 @Injectable()
 export class ProjectsService {
   constructor(
     @InjectRepository(Project) private readonly projectRepo: Repository<Project>,
+    @InjectRepository(BudgetItem) private readonly itemRepo: Repository<BudgetItem>,
   ) {}
 
   async listar(shopId: string, customerId: string, filtros: {
@@ -129,5 +131,51 @@ export class ProjectsService {
     project.estado = EstadoProyecto.BORRADOR;
     project.deleted_at = null;
     return this.projectRepo.save(project);
+  }
+
+  /**
+   * HU-03. Duplica el proyecto incluyendo presupuesto (items con su snapshot
+   * congelado y cantidades) y los parámetros de AIU. La copia nace en BORRADOR.
+   */
+  async duplicar(shopId: string, customerId: string, id: string) {
+    const origen = await this.obtener(shopId, customerId, id);
+
+    const copia = this.projectRepo.create({
+      shop_id: shopId,
+      customer_id: customerId,
+      nombre: `${origen.nombre} (copia)`,
+      cliente: origen.cliente,
+      ubicacion: origen.ubicacion,
+      area_m2: origen.area_m2,
+      tipo_obra: origen.tipo_obra,
+      fecha: origen.fecha,
+      aiu: origen.aiu,
+      estado: EstadoProyecto.BORRADOR,
+      version: 1,
+    });
+    const guardado = await this.projectRepo.save(copia);
+
+    const items = await this.itemRepo.find({
+      where: { project_id: origen.id, deleted_at: null },
+      order: { created_at: 'ASC' },
+    });
+
+    if (items.length) {
+      const copias = items.map((i) =>
+        this.itemRepo.create({
+          project_id: guardado.id,
+          chapter_id: i.chapter_id,
+          apu_id: i.apu_id,
+          apu_snapshot: i.apu_snapshot,
+          descripcion: i.descripcion,
+          unidad: i.unidad,
+          cantidad: i.cantidad,
+          valor_unitario: i.valor_unitario,
+        }),
+      );
+      await this.itemRepo.save(copias);
+    }
+
+    return this.obtener(shopId, customerId, guardado.id);
   }
 }

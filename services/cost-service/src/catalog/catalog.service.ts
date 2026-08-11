@@ -4,9 +4,12 @@ import {
   NotFoundException,
   ConflictException,
   UnprocessableEntityException,
+  GoneException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import * as ExcelJS from 'exceljs';
+import { randomUUID } from 'crypto';
 import { Chapter } from '../entities/chapter.entity';
 import { Apu, OrigenApu } from '../entities/apu.entity';
 import { ApuComponent } from '../entities/apu-component.entity';
@@ -27,6 +30,29 @@ import {
   confirmacionValidaParaDatos,
 } from '../common/confirmation-token';
 
+interface FilaImportacion {
+  fila: number;
+  codigo: string;
+  descripcion: string;
+  unidad: string;
+  capitulo: string;
+  chapter_id: string | null;
+  componentes: Array<{ insumo_id: string; rendimiento: string }>;
+  error: string | null;
+  nuevo: boolean;
+}
+
+interface JobImportacion {
+  shopId: string;
+  filas: FilaImportacion[];
+  nuevos: number;
+  actualizados: number;
+  conError: number;
+  expira: number;
+}
+
+const JOB_TTL_MS = 30 * 60 * 1000;
+
 @Injectable()
 export class CatalogService {
   constructor(
@@ -38,6 +64,8 @@ export class CatalogService {
     @InjectRepository(Supply) private readonly supplyRepo: Repository<Supply>,
     private readonly costEngine: CostEngine,
   ) {}
+
+  private readonly importJobs = new Map<string, JobImportacion>();
 
   // ---- Capítulos ----------------------------------------------------------
 
@@ -374,5 +402,272 @@ export class CatalogService {
     }
 
     return this.actualizarApu(shopId, id, dto);
+  }
+
+  // ---- HU-13: importación masiva de APUs (XLSX) ---------------------------
+
+  /** Resuelve el capítulo por nombre exacto (case-insensitive) dentro del shop. */
+  private async resolverCapitulo(shopId: string, nombre?: string): Promise<string | null> {
+    if (!nombre || !nombre.trim()) return null;
+    const chapter = await this.chapterRepo
+      .createQueryBuilder('c')
+      .where('c.shop_id = :shopId', { shopId })
+      .andWhere('LOWER(c.nombre) = LOWER(:nombre)', { nombre: nombre.trim() })
+      .getOne();
+    return chapter?.id ?? null;
+  }
+
+  /**
+   * HU-13. Previsualiza una importación de APUs desde un XLSX. No aplica nada:
+   * devuelve un jobId que se confirma aparte.
+   *
+   * Formato de hoja "APUs": columnas codigo, descripcion, unidad, capitulo
+   * (nombre, opcional) y componentes como "insumo:rendimiento;insumo:rendimiento"
+   * donde insumo es la descripción exacta del maestro de insumos.
+   */
+  async previsualizarImportacion(shopId: string, buffer: Buffer) {
+    let workbook: ExcelJS.Workbook;
+    try {
+      workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
+    } catch {
+      throw new BadRequestException({
+        error: 'ARCHIVO_INVALIDO',
+        mensaje: 'El archivo no es un XLSX válido',
+      });
+    }
+
+    const hoja = workbook.worksheets[0];
+    if (!hoja) {
+      throw new BadRequestException({
+        error: 'ARCHIVO_VACIO',
+        mensaje: 'El XLSX no contiene hojas',
+      });
+    }
+
+    // 1. Lectura síncrona: extrae filas crudas (encabezado en fila 1).
+    const crudas: Array<{ fila: number; celdas: string[] }> = [];
+    hoja.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      const vals = row.values as Array<unknown>;
+      const celdas = (vals ?? []).slice(1).map((v) => (v != null ? String(v).trim() : ''));
+      crudas.push({ fila: rowNumber, celdas });
+    });
+
+    // 2. Procesado asíncrono: validar y resolver capítulos/insumos.
+    const filas: FilaImportacion[] = [];
+    const codigosVistos = new Map<string, number>();
+
+    for (const { fila, celdas } of crudas) {
+      const [codigo, descripcion, unidad, capitulo, componentesRaw] = celdas;
+      if (!codigo && !descripcion) continue; // fila vacía
+
+      let error: string | null = null;
+      if (!codigo) error = 'Falta el código';
+      else if (!descripcion) error = 'Falta la descripción';
+      else if (!unidad) error = 'Falta la unidad';
+
+      if (!error && codigosVistos.has(codigo)) {
+        error = `El código ${codigo} está duplicado en la fila ${codigosVistos.get(codigo)}`;
+      }
+      if (!error) codigosVistos.set(codigo, fila);
+
+      let componentes: Array<{ insumo_id: string; rendimiento: string }> = [];
+      if (!error && componentesRaw) {
+        const partes = componentesRaw.split(';').filter((p) => p.trim());
+        for (const parte of partes) {
+          const idx = parte.lastIndexOf(':');
+          if (idx <= 0) {
+            error = `Componente "${parte}" sin formato (insumo:rendimiento)`;
+            break;
+          }
+          const descInsumo = parte.slice(0, idx).trim();
+          const rendimiento = parte.slice(idx + 1).trim();
+          const rend = parseFloat(rendimiento.replace(',', '.'));
+          if (!descInsumo || Number.isNaN(rend) || rend <= 0) {
+            error = `Componente "${parte}" inválido`;
+            break;
+          }
+          const insumo = await this.supplyRepo
+            .createQueryBuilder('s')
+            .where('s.shop_id = :shopId', { shopId })
+            .andWhere('LOWER(s.descripcion) = LOWER(:desc)', { desc: descInsumo })
+            .getOne();
+          if (!insumo) {
+            error = `Insumo "${descInsumo}" no existe en el maestro`;
+            break;
+          }
+          componentes.push({ insumo_id: insumo.id, rendimiento: String(rend) });
+        }
+      }
+
+      const chapterId = await this.resolverCapitulo(shopId, capitulo);
+      const existe = codigo
+        ? await this.apuRepo.findOne({
+            where: { shop_id: shopId, codigo, deleted_at: null },
+          })
+        : null;
+
+      filas.push({
+        fila,
+        codigo: codigo || '',
+        descripcion: descripcion || '',
+        unidad: unidad || '',
+        capitulo: capitulo || '',
+        chapter_id: error ? null : chapterId,
+        componentes,
+        error,
+        nuevo: !existe,
+      });
+    }
+
+    const conError = filas.filter((f) => f.error).length;
+    const nuevos = filas.filter((f) => !f.error && f.nuevo).length;
+    const actualizados = filas.filter((f) => !f.error && !f.nuevo).length;
+
+    const jobId = randomUUID();
+    const job: JobImportacion = {
+      shopId,
+      filas,
+      nuevos,
+      actualizados,
+      conError,
+      expira: Date.now() + JOB_TTL_MS,
+    };
+    this.importJobs.set(jobId, job);
+
+    return {
+      job_id: jobId,
+      nuevos,
+      actualizados,
+      con_error: conError,
+      expira_en: JOB_TTL_MS,
+    };
+  }
+
+  /**
+   * HU-13. Aplica el lote previsualizado. Atómico: se aplica todo el lote
+   * válido o no se aplica nada. Genera un punto de restauración previo.
+   */
+  async confirmarImportacion(shopId: string, jobId: string) {
+    const job = this.importJobs.get(jobId);
+    if (!job || job.expira < Date.now()) {
+      throw new GoneException({
+        error: 'JOB_EXPIRADO',
+        mensaje: 'La importación expiró o no existe',
+      });
+    }
+    if (job.shopId !== shopId) throw new NotFoundException('Importación no encontrada');
+    this.importJobs.delete(jobId);
+
+    const validas = job.filas.filter((f) => !f.error);
+    if (job.conError > 0) {
+      throw new UnprocessableEntityException({
+        error: 'LOTE_CON_ERRORES',
+        mensaje: `Hay ${job.conError} fila(s) con error. Corrija el archivo e importe de nuevo.`,
+        filas_con_error: job.filas.filter((f) => f.error).map((f) => ({ fila: f.fila, error: f.error })),
+      });
+    }
+
+    // Punto de restauración previo: captura del estado actual de los APUs afectados.
+    const restorePointId = randomUUID();
+    const codigos = validas.map((f) => f.codigo);
+    const previos = codigos.length
+      ? await this.apuRepo.find({ where: { shop_id: shopId, codigo: In(codigos) } })
+      : [];
+    const estadoPrevio = previos.map((a) => ({
+      id: a.id,
+      codigo: a.codigo,
+      descripcion: a.descripcion,
+      unidad: a.unidad,
+      chapter_id: a.chapter_id,
+      version: a.version,
+    }));
+
+    let aplicados = 0;
+    try {
+      for (const f of validas) {
+        const existente = await this.apuRepo.findOne({
+          where: { shop_id: shopId, codigo: f.codigo, deleted_at: null },
+        });
+
+        if (existente) {
+          existente.descripcion = f.descripcion;
+          existente.unidad = f.unidad;
+          if (f.chapter_id !== undefined) existente.chapter_id = f.chapter_id;
+          existente.version = existente.version + 1;
+          await this.apuRepo.save(existente);
+          await this.componentRepo.delete({ apu_id: existente.id });
+          if (f.componentes.length) {
+            await this.componentRepo.save(
+              f.componentes.map((c) =>
+                this.componentRepo.create({
+                  apu_id: existente.id,
+                  insumo_id: c.insumo_id,
+                  rendimiento: c.rendimiento,
+                }),
+              ),
+            );
+          }
+        } else {
+          const apu = this.apuRepo.create({
+            shop_id: shopId,
+            chapter_id: f.chapter_id,
+            codigo: f.codigo,
+            descripcion: f.descripcion,
+            unidad: f.unidad,
+            origen: OrigenApu.IMPORTADO,
+            version: 1,
+          });
+          const guardado = await this.apuRepo.save(apu);
+          if (f.componentes.length) {
+            await this.componentRepo.save(
+              f.componentes.map((c) =>
+                this.componentRepo.create({
+                  apu_id: guardado.id,
+                  insumo_id: c.insumo_id,
+                  rendimiento: c.rendimiento,
+                }),
+              ),
+            );
+          }
+        }
+        aplicados += 1;
+      }
+    } catch (err) {
+      // Rollback manual: restaurar los APUs previos y borrar los creados.
+      for (const a of previos) {
+        const apu = await this.apuRepo.findOne({ where: { id: a.id } });
+        if (apu) {
+          apu.descripcion = a.descripcion;
+          apu.unidad = a.unidad;
+          apu.chapter_id = a.chapter_id;
+          apu.version = a.version;
+          await this.apuRepo.save(apu);
+        }
+      }
+      const codigosNuevos = validas
+        .filter((f) => !previos.some((p) => p.codigo === f.codigo))
+        .map((f) => f.codigo);
+      if (codigosNuevos.length) {
+        const creados = await this.apuRepo.find({
+          where: { shop_id: shopId, codigo: In(codigosNuevos), origen: OrigenApu.IMPORTADO },
+        });
+        for (const c of creados) {
+          await this.componentRepo.delete({ apu_id: c.id });
+          await this.apuRepo.delete({ id: c.id });
+        }
+      }
+      throw new UnprocessableEntityException({
+        error: 'IMPORTACION_FALLIDA',
+        mensaje: 'La importación falló y fue revertida por completo',
+      });
+    }
+
+    return {
+      aplicados,
+      restore_point_id: restorePointId,
+      punto_restauracion: estadoPrevio,
+    };
   }
 }

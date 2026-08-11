@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -9,7 +10,10 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser, CurrentUserData } from '../common/current-user.decorator';
 import { CatalogService } from './catalog.service';
 import {
@@ -124,5 +128,30 @@ export class CatalogController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.catalogService.eliminarApu(user.shop_id, id);
+  }
+
+  // ---- HU-13: importación masiva -----------------------------------------
+
+  @Post('catalog/apus/import')
+  @UseInterceptors(FileInterceptor('archivo'))
+  previsualizarImport(
+    @CurrentUser() user: CurrentUserData,
+    @UploadedFile() file?: { buffer?: Buffer },
+  ) {
+    if (!file || !file.buffer) {
+      throw new BadRequestException({
+        error: 'ARCHIVO_REQUERIDO',
+        mensaje: 'Envíe el archivo XLSX en el campo "archivo"',
+      });
+    }
+    return this.catalogService.previsualizarImportacion(user.shop_id, file.buffer);
+  }
+
+  @Post('catalog/imports/:jobId/confirm')
+  confirmarImport(
+    @CurrentUser() user: CurrentUserData,
+    @Param('jobId') jobId: string,
+  ) {
+    return this.catalogService.confirmarImportacion(user.shop_id, jobId);
   }
 }

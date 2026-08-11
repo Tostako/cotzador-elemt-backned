@@ -1,12 +1,10 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Supply } from '../entities/supply.entity';
 import { SupplyPrice, OrigenPrecio } from '../entities/supply-price.entity';
+import { Apu } from '../entities/apu.entity';
+import { ApuComponent } from '../entities/apu-component.entity';
 import { BudgetItem } from '../entities/budget-item.entity';
 import { Project } from '../entities/project.entity';
 import { CostEngine } from '../cost-engine/cost-engine.service';
@@ -22,6 +20,8 @@ export class SuppliesService {
   constructor(
     @InjectRepository(Supply) private readonly supplyRepo: Repository<Supply>,
     @InjectRepository(SupplyPrice) private readonly priceRepo: Repository<SupplyPrice>,
+    @InjectRepository(Apu) private readonly apuRepo: Repository<Apu>,
+    @InjectRepository(ApuComponent) private readonly componentRepo: Repository<ApuComponent>,
     @InjectRepository(BudgetItem) private readonly itemRepo: Repository<BudgetItem>,
     @InjectRepository(Project) private readonly projectRepo: Repository<Project>,
     private readonly costEngine: CostEngine,
@@ -185,6 +185,74 @@ export class SuppliesService {
       total_insumos: supplies.length,
       sin_precio: sinPrecio,
       recalculado: true,
+    };
+  }
+
+  // ---- HU-15: dónde se usa un insumo --------------------------------------
+
+  /**
+   * HU-15. Convierte el contador de la interfaz en información navegable:
+   * qué APUs del catálogo usan el insumo y (opcionalmente) cómo impacta en un
+   * proyecto activo.
+   */
+  async uso(shopId: string, supplyId: string, projectId?: string) {
+    const supply = await this.obtener(shopId, supplyId);
+
+    // APUs activos del catálogo que usan el insumo.
+    const componentes = await this.componentRepo
+      .createQueryBuilder('c')
+      .innerJoin(Apu, 'a', 'a.id = c.apu_id')
+      .where('c.insumo_id = :supplyId', { supplyId })
+      .andWhere('a.shop_id = :shopId', { shopId })
+      .andWhere('a.deleted_at IS NULL')
+      .select('c.apu_id', 'apu_id')
+      .addSelect('c.rendimiento', 'rendimiento')
+      .addSelect('a.codigo', 'codigo')
+      .addSelect('a.descripcion', 'descripcion')
+      .getRawMany();
+
+    const apus = componentes.map((c) => ({
+      id: c.apu_id,
+      codigo: c.codigo,
+      descripcion: c.descripcion,
+      rendimiento: String(c.rendimiento),
+    }));
+
+    // Impacto en el proyecto activo indicado (si se pasa).
+    let enProyectoActivo = null;
+    if (projectId) {
+      const project = await this.projectRepo.findOne({
+        where: { id: projectId, shop_id: shopId, deleted_at: null },
+      });
+      if (!project) throw new NotFoundException('Proyecto no encontrado');
+
+      const items = await this.itemRepo
+        .createQueryBuilder('i')
+        .where('i.project_id = :projectId', { projectId })
+        .andWhere('i.deleted_at IS NULL')
+        .andWhere('i.apu_snapshot @> :filtro', {
+          filtro: JSON.stringify({ componentes: [{ insumo_id: supplyId }] }),
+        })
+        .getMany();
+
+      const valorAfectado = items.reduce(
+        (acc, i) => acc + Math.round(parseFloat(i.cantidad) * parseFloat(i.valor_unitario) * 100),
+        0,
+      );
+
+      enProyectoActivo = {
+        actividades: items.length,
+        valor_afectado: (valorAfectado / 100).toFixed(2),
+      };
+    }
+
+    return {
+      insumo_id: supply.id,
+      descripcion: supply.descripcion,
+      unidad: supply.unidad,
+      total_apus: apus.length,
+      apus,
+      en_proyecto_activo: enProyectoActivo,
     };
   }
 }

@@ -89,6 +89,14 @@ export class ProjectsController {
     return this.projectsService.eliminar(user.shop_id, user.customer_id, id);
   }
 
+  @Post(':id/duplicate')
+  duplicar(
+    @CurrentUser() user: CurrentUserData,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.projectsService.duplicar(user.shop_id, user.customer_id, id);
+  }
+
   @Post(':id/restaurar')
   restaurar(
     @CurrentUser() user: CurrentUserData,
