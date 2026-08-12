@@ -15,7 +15,7 @@ import { Apu, OrigenApu } from '../entities/apu.entity';
 import { ApuComponent } from '../entities/apu-component.entity';
 import { BudgetItem } from '../entities/budget-item.entity';
 import { Project } from '../entities/project.entity';
-import { Supply } from '../entities/supply.entity';
+import { Supply, GrupoInsumo } from '../entities/supply.entity';
 import { CostEngine } from '../cost-engine/cost-engine.service';
 import { fromCents, toCents } from '../common/money';
 import {
@@ -43,8 +43,28 @@ interface FilaImportacion {
 }
 
 interface JobImportacion {
+  tipo: 'APU';
   shopId: string;
   filas: FilaImportacion[];
+  nuevos: number;
+  actualizados: number;
+  conError: number;
+  expira: number;
+}
+
+interface FilaInsumoImportacion {
+  fila: number;
+  descripcion: string;
+  unidad: string;
+  grupo: string;
+  error: string | null;
+  nuevo: boolean;
+}
+
+interface JobInsumoImportacion {
+  tipo: 'INSUMO';
+  shopId: string;
+  filas: FilaInsumoImportacion[];
   nuevos: number;
   actualizados: number;
   conError: number;
@@ -65,7 +85,7 @@ export class CatalogService {
     private readonly costEngine: CostEngine,
   ) {}
 
-  private readonly importJobs = new Map<string, JobImportacion>();
+  private readonly importJobs = new Map<string, JobImportacion | JobInsumoImportacion>();
 
   // ---- Capítulos ----------------------------------------------------------
 
@@ -527,6 +547,7 @@ export class CatalogService {
 
     const jobId = randomUUID();
     const job: JobImportacion = {
+      tipo: 'APU',
       shopId,
       filas,
       nuevos,
@@ -550,7 +571,7 @@ export class CatalogService {
    * válido o no se aplica nada. Genera un punto de restauración previo.
    */
   async confirmarImportacion(shopId: string, jobId: string) {
-    const job = this.importJobs.get(jobId);
+    const job = this.importJobs.get(jobId) as JobImportacion | undefined;
     if (!job || job.expira < Date.now()) {
       throw new GoneException({
         error: 'JOB_EXPIRADO',
@@ -558,7 +579,6 @@ export class CatalogService {
       });
     }
     if (job.shopId !== shopId) throw new NotFoundException('Importación no encontrada');
-    this.importJobs.delete(jobId);
 
     const validas = job.filas.filter((f) => !f.error);
     if (job.conError > 0) {
@@ -568,6 +588,7 @@ export class CatalogService {
         filas_con_error: job.filas.filter((f) => f.error).map((f) => ({ fila: f.fila, error: f.error })),
       });
     }
+    this.importJobs.delete(jobId);
 
     // Punto de restauración previo: captura del estado actual de los APUs afectados.
     const restorePointId = randomUUID();
@@ -657,6 +678,227 @@ export class CatalogService {
           await this.componentRepo.delete({ apu_id: c.id });
           await this.apuRepo.delete({ id: c.id });
         }
+      }
+      throw new UnprocessableEntityException({
+        error: 'IMPORTACION_FALLIDA',
+        mensaje: 'La importación falló y fue revertida por completo',
+      });
+    }
+
+    return {
+      aplicados,
+      restore_point_id: restorePointId,
+      punto_restauracion: estadoPrevio,
+    };
+  }
+
+  // ---- Importación masiva de insumos (mismo registro de jobs que APUs) ----
+
+  /** Indica el tipo de job (APU | INSUMO) o lanza 410/404 si no existe. */
+  tipoDeImportacion(shopId: string, jobId: string): 'APU' | 'INSUMO' {
+    const job = this.importJobs.get(jobId);
+    if (!job || job.expira < Date.now()) {
+      throw new GoneException({
+        error: 'JOB_EXPIRADO',
+        mensaje: 'La importación expiró o no existe',
+      });
+    }
+    if (job.shopId !== shopId) throw new NotFoundException('Importación no encontrada');
+    return job.tipo;
+  }
+
+  /** Errores por fila de un job previsualizado, sea de APUs o insumos. */
+  erroresDeImportacion(shopId: string, jobId: string) {
+    const job = this.importJobs.get(jobId);
+    if (!job || job.expira < Date.now()) {
+      throw new GoneException({
+        error: 'JOB_EXPIRADO',
+        mensaje: 'La importación expiró o no existe',
+      });
+    }
+    if (job.shopId !== shopId) throw new NotFoundException('Importación no encontrada');
+    const filasConError = job.filas.filter((f) => f.error).map((f) => ({ fila: f.fila, error: f.error }));
+    return { con_error: filasConError.length, filas_con_error: filasConError };
+  }
+
+  /**
+   * Formato de hoja "Insumos" (o primera hoja): columnas descripcion, unidad,
+   * grupo (MATERIAL, MANO_OBRA, EQUIPO o TRANSPORTE). Una fila por insumo; si
+   * la descripción ya existe en el shop se marca como actualizado.
+   */
+  async previsualizarImportacionInsumos(shopId: string, buffer: Buffer) {
+    let workbook: ExcelJS.Workbook;
+    try {
+      workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
+    } catch {
+      throw new BadRequestException({
+        error: 'ARCHIVO_INVALIDO',
+        mensaje: 'El archivo no es un XLSX válido',
+      });
+    }
+
+    const hoja =
+      workbook.worksheets.find((w) => w.name.toLowerCase().replace(/[^a-z]/g, '') === 'insumos') ??
+      workbook.worksheets[0];
+    if (!hoja) {
+      throw new BadRequestException({
+        error: 'ARCHIVO_VACIO',
+        mensaje: 'El XLSX no contiene hojas',
+      });
+    }
+
+    const crudas: Array<{ fila: number; celdas: string[] }> = [];
+    hoja.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      const vals = row.values as Array<unknown>;
+      const celdas = (vals ?? []).slice(1).map((v) => (v != null ? String(v).trim() : ''));
+      crudas.push({ fila: rowNumber, celdas });
+    });
+
+    const filas: FilaInsumoImportacion[] = [];
+    const vistos = new Map<string, number>();
+
+    for (const { fila, celdas } of crudas) {
+      const [descripcion, unidad, grupo] = celdas;
+      if (!descripcion && !unidad && !grupo) continue;
+
+      let error: string | null = null;
+      if (!descripcion) error = 'Falta la descripción';
+      else if (!unidad) error = 'Falta la unidad';
+      else if (!grupo) error = 'Falta el grupo';
+
+      const clave = descripcion.toLowerCase();
+      if (!error && vistos.has(clave)) {
+        error = `La descripción "${descripcion}" está duplicada en la fila ${vistos.get(clave)}`;
+      }
+      if (!error) vistos.set(clave, fila);
+
+      if (!error && !Object.values(GrupoInsumo).includes(grupo.toUpperCase() as GrupoInsumo)) {
+        error = `Grupo "${grupo}" inválido (use MATERIAL, MANO_OBRA, EQUIPO o TRANSPORTE)`;
+      }
+
+      let existe = false;
+      if (!error) {
+        existe = !!(await this.supplyRepo
+          .createQueryBuilder('s')
+          .where('s.shop_id = :shopId', { shopId })
+          .andWhere('LOWER(s.descripcion) = LOWER(:desc)', { desc: descripcion })
+          .getOne());
+      }
+
+      filas.push({
+        fila,
+        descripcion: descripcion || '',
+        unidad: unidad || '',
+        grupo: grupo ? grupo.toUpperCase() : '',
+        error,
+        nuevo: !existe,
+      });
+    }
+
+    const conError = filas.filter((f) => f.error).length;
+    const nuevos = filas.filter((f) => !f.error && f.nuevo).length;
+    const actualizados = filas.filter((f) => !f.error && !f.nuevo).length;
+
+    const jobId = randomUUID();
+    const job: JobInsumoImportacion = {
+      tipo: 'INSUMO',
+      shopId,
+      filas,
+      nuevos,
+      actualizados,
+      conError,
+      expira: Date.now() + JOB_TTL_MS,
+    };
+    this.importJobs.set(jobId, job);
+
+    return {
+      job_id: jobId,
+      nuevos,
+      actualizados,
+      con_error: conError,
+      expira_en: JOB_TTL_MS,
+    };
+  }
+
+  /** Aplica el lote de insumos. Atómico, con punto de restauración y rollback. */
+  async confirmarImportacionInsumos(shopId: string, jobId: string) {
+    const job = this.importJobs.get(jobId) as JobInsumoImportacion | undefined;
+    if (!job || job.expira < Date.now()) {
+      throw new GoneException({
+        error: 'JOB_EXPIRADO',
+        mensaje: 'La importación expiró o no existe',
+      });
+    }
+    if (job.shopId !== shopId) throw new NotFoundException('Importación no encontrada');
+
+    const validas = job.filas.filter((f) => !f.error);
+    if (job.conError > 0) {
+      throw new UnprocessableEntityException({
+        error: 'LOTE_CON_ERRORES',
+        mensaje: `Hay ${job.conError} fila(s) con error. Corrija el archivo e importe de nuevo.`,
+        filas_con_error: job.filas.filter((f) => f.error).map((f) => ({ fila: f.fila, error: f.error })),
+      });
+    }
+    this.importJobs.delete(jobId);
+
+    const restorePointId = randomUUID();
+    const descripciones = validas.map((f) => f.descripcion);
+    const previos = descripciones.length
+      ? await this.supplyRepo
+          .createQueryBuilder('s')
+          .where('s.shop_id = :shopId', { shopId })
+          .andWhere('LOWER(s.descripcion) IN (:...desc)', { desc: descripciones.map((d) => d.toLowerCase()) })
+          .getMany()
+      : [];
+    const estadoPrevio = previos.map((s) => ({
+      id: s.id,
+      descripcion: s.descripcion,
+      unidad: s.unidad,
+      grupo: s.grupo,
+    }));
+
+    let aplicados = 0;
+    const creadosIds: string[] = [];
+    try {
+      for (const f of validas) {
+        const existente = await this.supplyRepo
+          .createQueryBuilder('s')
+          .where('s.shop_id = :shopId', { shopId })
+          .andWhere('LOWER(s.descripcion) = LOWER(:desc)', { desc: f.descripcion })
+          .getOne();
+
+        if (existente) {
+          existente.unidad = f.unidad;
+          existente.grupo = f.grupo as GrupoInsumo;
+          await this.supplyRepo.save(existente);
+        } else {
+          const creado = await this.supplyRepo.save(
+            this.supplyRepo.create({
+              shop_id: shopId,
+              descripcion: f.descripcion,
+              unidad: f.unidad,
+              grupo: f.grupo as GrupoInsumo,
+            }),
+          );
+          creadosIds.push(creado.id);
+        }
+        aplicados += 1;
+      }
+    } catch (err) {
+      // Rollback manual: restaurar los insumos previos y borrar los creados.
+      for (const s of previos) {
+        const sup = await this.supplyRepo.findOne({ where: { id: s.id } });
+        if (sup) {
+          sup.descripcion = s.descripcion;
+          sup.unidad = s.unidad;
+          sup.grupo = s.grupo;
+          await this.supplyRepo.save(sup);
+        }
+      }
+      if (creadosIds.length) {
+        await this.supplyRepo.delete({ id: In(creadosIds) });
       }
       throw new UnprocessableEntityException({
         error: 'IMPORTACION_FALLIDA',

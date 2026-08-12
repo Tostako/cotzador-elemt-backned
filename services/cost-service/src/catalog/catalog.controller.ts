@@ -152,6 +152,33 @@ export class CatalogController {
     @CurrentUser() user: CurrentUserData,
     @Param('jobId') jobId: string,
   ) {
+    const tipo = this.catalogService.tipoDeImportacion(user.shop_id, jobId);
+    if (tipo === 'INSUMO') {
+      return this.catalogService.confirmarImportacionInsumos(user.shop_id, jobId);
+    }
     return this.catalogService.confirmarImportacion(user.shop_id, jobId);
+  }
+
+  @Get('imports/:jobId/errors')
+  erroresImport(
+    @CurrentUser() user: CurrentUserData,
+    @Param('jobId') jobId: string,
+  ) {
+    return this.catalogService.erroresDeImportacion(user.shop_id, jobId);
+  }
+
+  @Post('supplies/import')
+  @UseInterceptors(FileInterceptor('archivo'))
+  previsualizarImportInsumos(
+    @CurrentUser() user: CurrentUserData,
+    @UploadedFile() file?: { buffer?: Buffer },
+  ) {
+    if (!file || !file.buffer) {
+      throw new BadRequestException({
+        error: 'ARCHIVO_REQUERIDO',
+        mensaje: 'Envíe el archivo XLSX en el campo "archivo"',
+      });
+    }
+    return this.catalogService.previsualizarImportacionInsumos(user.shop_id, file.buffer);
   }
 }
