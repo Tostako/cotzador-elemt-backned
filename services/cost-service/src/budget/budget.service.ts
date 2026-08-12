@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  PreconditionFailedException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -201,10 +202,18 @@ export class BudgetService {
     itemId: string,
     dto: UpdateItemDto,
     usuario?: string,
+    ifMatch?: string,
   ) {
     const project = await this.obtenerProyecto(shopId, customerId, projectId);
     const item = await this.itemRepo.findOne({ where: { id: itemId, project_id: project.id } });
     if (!item) throw new NotFoundException('Item no encontrado');
+
+    if (ifMatch && ifMatch !== this.etagDeSnapshot(item)) {
+      throw new PreconditionFailedException({
+        error: 'VERSION_CONFLICT',
+        mensaje: 'El item fue modificado por otra persona. Recargue e intente de nuevo.',
+      });
+    }
 
     const antes = await this.snapState(project.id, project.version);
 
@@ -215,7 +224,7 @@ export class BudgetService {
 
     const despues = await this.snapState(project.id, project.version);
     const event = await this.registrarEvento(project.id, 'ITEM_UPDATE', antes, despues, usuario);
-    return { item, undo_token: event.undo_token };
+    return { item, undo_token: event.undo_token, etag: this.etagDeSnapshot(item) };
   }
 
   async eliminarItem(
@@ -264,7 +273,9 @@ export class BudgetService {
       order: { created_at: 'ASC' },
     });
     const calculo = await this.costEngine.calcularProyecto(project);
-    return { items, ...calculo };
+    const etagPorId = new Map(items.map((i) => [i.id, this.etagDeSnapshot(i)]));
+    const conEtag = calculo.items.map((row) => ({ ...row, etag: etagPorId.get(row.item_id) ?? null }));
+    return { ...calculo, items: conEtag };
   }
 
   async validar(shopId: string, customerId: string, projectId: string) {

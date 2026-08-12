@@ -10,7 +10,9 @@ import {
   Post,
   Put,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { CurrentUser, CurrentUserData } from '../common/current-user.decorator';
 import { BudgetService } from './budget.service';
 import { AddItemDto, UpdateItemDto, ValidateBudgetDto, EditarApuSnapshotDto } from './budget.dto';
@@ -42,8 +44,15 @@ export class BudgetController {
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Param('itemId', ParseUUIDPipe) itemId: string,
     @Body() dto: UpdateItemDto,
+    @Headers('if-match') ifMatch?: string,
+    @Res({ passthrough: true }) res?: Response,
   ) {
-    return this.budgetService.actualizarItem(user.shop_id, user.customer_id, projectId, itemId, dto, user.email);
+    return this.budgetService
+      .actualizarItem(user.shop_id, user.customer_id, projectId, itemId, dto, user.email, ifMatch)
+      .then((resultado) => {
+        if (resultado?.etag) res?.setHeader('ETag', resultado.etag);
+        return resultado;
+      });
   }
 
   @Delete('budget/items/:itemId')

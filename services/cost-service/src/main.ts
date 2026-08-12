@@ -28,7 +28,8 @@ async function bootstrap() {
   app.useGlobalInterceptors(new LoggingInterceptor(), new ResponseInterceptor());
   app.useGlobalFilters(new AllExceptionsFilter());
 
-  const httpAdapter = app.getHttpAdapter();
+const httpAdapter = app.getHttpAdapter();
+  httpAdapter.getInstance().set('etag', false);
   httpAdapter.get('/', (_req, res) => res.status(200).json({
     status: 'ok',
     service: 'cost-service',
