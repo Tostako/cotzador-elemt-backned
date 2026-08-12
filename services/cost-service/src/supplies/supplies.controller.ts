@@ -8,7 +8,11 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { BadRequestException } from '@nestjs/common';
 import { CurrentUser, CurrentUserData } from '../common/current-user.decorator';
 import { SuppliesService } from './supplies.service';
 import {
@@ -59,6 +63,31 @@ export class SuppliesController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.suppliesService.eliminar(user.shop_id, id);
+  }
+
+  // ---- Importación masiva de insumos --------------------------------------
+
+  @Post('import')
+  @UseInterceptors(FileInterceptor('archivo'))
+  previsualizarImport(
+    @CurrentUser() user: CurrentUserData,
+    @UploadedFile() file?: { buffer?: Buffer },
+  ) {
+    if (!file || !file.buffer) {
+      throw new BadRequestException({
+        error: 'ARCHIVO_REQUERIDO',
+        mensaje: 'Envíe el archivo XLSX en el campo "archivo"',
+      });
+    }
+    return this.suppliesService.previsualizarImportacion(user.shop_id, file.buffer);
+  }
+
+  @Post('imports/:jobId/confirm')
+  confirmarImport(
+    @CurrentUser() user: CurrentUserData,
+    @Param('jobId') jobId: string,
+  ) {
+    return this.suppliesService.confirmarImportacion(user.shop_id, jobId);
   }
 
   @Get(':id/usage')
