@@ -1,0 +1,1705 @@
+openapi: 3.1.0
+info:
+  title: API de Presupuestos de Obra
+  version: 1.0.0
+  description: |
+    API derivada de las historias de usuario del DOC-02 y de las decisiones de
+    diseno adoptadas en el DOC-03.
+
+    Patrones transversales:
+      - Confirmacion de impacto en dos fases (dryRun -> X-Confirmation-Token)
+      - Reversibilidad con undoToken y endpoint generico POST /undo/{token}
+      - Concurrencia optimista con ETag e If-Match
+      - Validacion en dos capas: 422 para errores duros, arreglo `avisos` para blandos
+      - Analitica calculada bajo demanda, con computedAt y ETag
+  contact:
+    name: Equipo de producto
+servers:
+  - url: https://api.example.com/v1
+    description: Produccion
+  - url: https://api.staging.example.com/v1
+    description: Pruebas
+
+tags:
+  - name: Auth
+    description: Autenticacion y sesion
+  - name: Proyectos
+    description: HU-01, HU-02, HU-03
+  - name: Presupuesto
+    description: HU-04 a HU-08, HU-16
+  - name: Catalogo APU
+    description: HU-09 a HU-13
+  - name: Insumos
+    description: HU-14, HU-15
+  - name: Analitica
+    description: HU-17, HU-18, HU-19
+  - name: Documentos
+    description: HU-20, HU-21
+  - name: Cotizacion
+    description: HU-22
+  - name: IA
+    description: HU-23, HU-24
+  - name: Marca
+    description: HU-25
+
+security:
+  - bearerAuth: []
+
+paths:
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Iniciar sesion
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Sesion iniciada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken: { type: string }
+                  refreshToken: { type: string }
+                  expiraEn: { type: integer, description: Segundos }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /me:
+    get:
+      tags: [Auth]
+      summary: Usuario, organizacion y permisos efectivos
+      responses:
+        '200':
+          description: Perfil del usuario
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  nombre: { type: string }
+                  organizacionId: { type: string }
+                  perfil:
+                    type: string
+                    enum: [consulta, presupuestador, admin_catalogo, admin_org]
+                  capacidades:
+                    type: array
+                    items: { type: string }
+
+  /projects:
+    get:
+      tags: [Proyectos]
+      summary: Listar proyectos
+      description: HU-03
+      parameters:
+        - $ref: '#/components/parameters/q'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+        - name: estado
+          in: query
+          schema:
+            type: string
+            enum: [BORRADOR, EN_REVISION, APROBADO, ARCHIVADO, PAPELERA]
+      responses:
+        '200':
+          description: Listado paginado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Proyecto' }
+                  pagina: { $ref: '#/components/schemas/Pagina' }
+                  total: { type: integer }
+    post:
+      tags: [Proyectos]
+      summary: Crear proyecto
+      description: HU-01. El areaM2 es obligatorio porque divide todos los indicadores.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProyectoInput' }
+      responses:
+        '201':
+          description: Proyecto creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proyecto' }
+        '422': { $ref: '#/components/responses/Validacion' }
+
+  /projects/{projectId}:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+    get:
+      tags: [Proyectos]
+      summary: Obtener proyecto
+      description: HU-01
+      responses:
+        '200':
+          description: Encabezado y estado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proyecto' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    patch:
+      tags: [Proyectos]
+      summary: Editar encabezado del proyecto
+      description: HU-01. Requiere If-Match.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProyectoInput' }
+      responses:
+        '200':
+          description: Proyecto actualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proyecto' }
+        '412': { $ref: '#/components/responses/ConflictoVersion' }
+    delete:
+      tags: [Proyectos]
+      summary: Enviar proyecto a la papelera
+      description: HU-03. Exige confirmacion escribiendo el nombre.
+      parameters:
+        - $ref: '#/components/parameters/ConfirmationToken'
+      responses:
+        '200':
+          description: Enviado a papelera
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  undoToken: { type: string }
+        '428': { $ref: '#/components/responses/ConfirmacionRequerida' }
+
+  /projects/{projectId}/duplicate:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+    post:
+      tags: [Proyectos]
+      summary: Duplicar proyecto
+      description: HU-03. Copia presupuesto, cantidades y parametros de AIU.
+      responses:
+        '201':
+          description: Proyecto duplicado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proyecto' }
+
+  /templates:
+    get:
+      tags: [Proyectos]
+      summary: Plantillas de proyecto disponibles
+      description: HU-02. El valor de referencia se recalcula con precios vigentes.
+      responses:
+        '200':
+          description: Plantillas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, examples: [tpl_remod80] }
+                        codigo: { type: string, examples: [PLAN] }
+                        nombre: { type: string }
+                        alcance: { type: string }
+                        areaReferencia: { type: number }
+                        valorReferencia: { $ref: '#/components/schemas/Dinero' }
+
+  /projects/{projectId}/apply-template:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+    post:
+      tags: [Proyectos]
+      summary: Aplicar una plantilla al presupuesto
+      description: HU-02. Operacion atomica. El modo es obligatorio si ya hay contenido.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [templateId]
+              properties:
+                templateId: { type: string }
+                modo:
+                  type: string
+                  enum: [REEMPLAZAR, AGREGAR]
+      responses:
+        '200':
+          description: Plantilla aplicada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  actividadesCargadas: { type: integer }
+                  actividadesOmitidas:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        apuId: { type: string }
+                        motivo: { type: string }
+                  totales: { $ref: '#/components/schemas/Totales' }
+                  undoToken: { type: string }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /projects/{projectId}/budget:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+    get:
+      tags: [Presupuesto]
+      summary: Presupuesto agrupado por capitulos
+      description: HU-06
+      responses:
+        '200':
+          description: Presupuesto
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  capitulos:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        nombre: { type: string }
+                        orden: { type: integer }
+                        subtotal: { $ref: '#/components/schemas/Dinero' }
+                        items:
+                          type: array
+                          items: { $ref: '#/components/schemas/Actividad' }
+                  totales: { $ref: '#/components/schemas/Totales' }
+
+  /projects/{projectId}/budget/items:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+    post:
+      tags: [Presupuesto]
+      summary: Agregar actividad al presupuesto
+      description: |
+        HU-04. Congela una instantanea del APU dentro del proyecto (decision H-07).
+        El valorUnitario y el valorParcial se calculan en el servidor.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [apuId, cantidad]
+              properties:
+                apuId: { type: string }
+                cantidad: { type: number, exclusiveMinimum: 0 }
+                siExiste:
+                  type: string
+                  enum: [SUMAR, NUEVA_LINEA]
+      responses:
+        '201':
+          description: Actividad agregada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Actividad' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+        '422': { $ref: '#/components/responses/Validacion' }
+
+  /projects/{projectId}/budget/items/{itemId}:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+      - $ref: '#/components/parameters/itemId'
+    patch:
+      tags: [Presupuesto]
+      summary: Editar la cantidad de obra
+      description: HU-05. Unico campo editable. Devuelve la cascada recalculada.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cantidad]
+              properties:
+                cantidad: { type: number, exclusiveMinimum: 0 }
+      responses:
+        '200':
+          description: Cantidad actualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Actividad' }
+        '412': { $ref: '#/components/responses/ConflictoVersion' }
+        '422': { $ref: '#/components/responses/Validacion' }
+    delete:
+      tags: [Presupuesto]
+      summary: Eliminar actividad
+      description: HU-07. Borrado logico con undoToken de 10 segundos.
+      responses:
+        '200':
+          description: Actividad eliminada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  eliminado: { type: string }
+                  undoToken: { type: string }
+                  expiraEn: { type: string, format: date-time }
+                  totales: { $ref: '#/components/schemas/Totales' }
+
+  /projects/{projectId}/budget/items/{itemId}/apu:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+      - $ref: '#/components/parameters/itemId'
+    get:
+      tags: [Catalogo APU]
+      summary: Instantanea del APU de la actividad
+      description: HU-11
+      responses:
+        '200':
+          description: Instantanea
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApuSnapshot' }
+    put:
+      tags: [Catalogo APU]
+      summary: Editar el APU con alcance de proyecto
+      description: |
+        HU-11, decision H-07. Modifica solo la instantanea del proyecto.
+        El catalogo global no se altera y ningun otro proyecto se ve afectado.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                descripcion: { type: string }
+                componentes:
+                  type: array
+                  items:
+                    type: object
+                    required: [insumoId, rendimiento]
+                    properties:
+                      insumoId: { type: string }
+                      rendimiento: { type: number, exclusiveMinimum: 0 }
+      responses:
+        '200':
+          description: Instantanea actualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApuSnapshot' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /projects/{projectId}/budget/items/{itemId}/apu/promote:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+      - $ref: '#/components/parameters/itemId'
+    post:
+      tags: [Catalogo APU]
+      summary: Promover la version del proyecto al catalogo global
+      description: |
+        HU-11, decision H-07. Requiere perfil admin_catalogo.
+        Llamar primero con dryRun=true para obtener el impacto y el confirmationToken.
+      parameters:
+        - $ref: '#/components/parameters/dryRun'
+        - $ref: '#/components/parameters/ConfirmationToken'
+      responses:
+        '200':
+          description: Analisis de impacto o publicacion realizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Impacto' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '428': { $ref: '#/components/responses/ConfirmacionRequerida' }
+
+  /undo/{undoToken}:
+    parameters:
+      - name: undoToken
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Presupuesto]
+      summary: Deshacer la ultima accion destructiva
+      description: HU-07, decision H-09. Token de un solo uso con vigencia de 10 segundos.
+      responses:
+        '200':
+          description: Accion revertida
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  restaurado:
+                    type: object
+                    properties:
+                      tipo: { type: string }
+                      id: { type: string }
+                  totales: { $ref: '#/components/schemas/Totales' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+        '410':
+          description: El token expiro
+
+  /projects/{projectId}/aiu:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+    get:
+      tags: [Presupuesto]
+      summary: Configuracion de AIU vigente
+      description: HU-16
+      responses:
+        '200':
+          description: AIU
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Aiu' }
+    put:
+      tags: [Presupuesto]
+      summary: Actualizar AIU, IVA y descuento
+      description: |
+        HU-16. Los tres porcentajes se aplican de forma independiente sobre el
+        costo directo, nunca en cascada uno sobre otro.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Aiu' }
+      responses:
+        '200':
+          description: AIU actualizado con totales recalculados
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  aiu: { $ref: '#/components/schemas/Aiu' }
+                  totales: { $ref: '#/components/schemas/Totales' }
+
+  /catalog/apus:
+    get:
+      tags: [Catalogo APU]
+      summary: Listar APUs del catalogo
+      description: HU-09. Busqueda insensible a mayusculas y tildes.
+      parameters:
+        - $ref: '#/components/parameters/q'
+        - name: capituloId
+          in: query
+          schema: { type: string }
+        - name: origen
+          in: query
+          schema:
+            type: string
+            enum: [BASE, PERSONALIZADO, GENERADO_IA, IMPORTADO]
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200':
+          description: Listado paginado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Apu' }
+                  pagina: { $ref: '#/components/schemas/Pagina' }
+                  total: { type: integer }
+    post:
+      tags: [Catalogo APU]
+      summary: Crear un APU
+      description: HU-10. Requiere perfil admin_catalogo.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApuInput' }
+      responses:
+        '201':
+          description: APU creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Apu' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /catalog/apus/{apuId}:
+    parameters:
+      - $ref: '#/components/parameters/apuId'
+    get:
+      tags: [Catalogo APU]
+      summary: Ficha del APU con sus componentes
+      description: HU-09
+      responses:
+        '200':
+          description: APU
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Apu' }
+    patch:
+      tags: [Catalogo APU]
+      summary: Editar el APU del catalogo global
+      description: |
+        HU-11. Alcance de empresa. Requiere admin_catalogo y confirmacion de impacto.
+      parameters:
+        - $ref: '#/components/parameters/dryRun'
+        - $ref: '#/components/parameters/ConfirmationToken'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApuInput' }
+      responses:
+        '200':
+          description: APU actualizado o analisis de impacto
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Impacto' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '428': { $ref: '#/components/responses/ConfirmacionRequerida' }
+
+  /catalog/apus/{apuId}/duplicate:
+    parameters:
+      - $ref: '#/components/parameters/apuId'
+    post:
+      tags: [Catalogo APU]
+      summary: Duplicar un APU
+      description: HU-12. El nombre de la copia es obligatorio y debe diferir del original.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [descripcion]
+              properties:
+                descripcion: { type: string }
+      responses:
+        '201':
+          description: Copia creada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Apu' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /catalog/apus/{apuId}/impact:
+    parameters:
+      - $ref: '#/components/parameters/apuId'
+    get:
+      tags: [Catalogo APU]
+      summary: Proyectos y presupuestos afectados por un cambio
+      description: HU-11
+      responses:
+        '200':
+          description: Impacto
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Impacto' }
+
+  /catalog/counters:
+    get:
+      tags: [Catalogo APU]
+      summary: Fuente unica de los contadores de catalogo
+      description: |
+        HU-09, decision H-13. Ninguna cifra de catalogo se calcula en el cliente
+        ni se escribe a mano en la interfaz.
+      parameters:
+        - name: projectId
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Contadores
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  apusCatalogo: { type: integer, examples: [3250] }
+                  apusEnProyecto: { type: integer, examples: [30] }
+                  apusPersonalizados: { type: integer, examples: [12] }
+                  insumosCatalogo: { type: integer, examples: [120] }
+                  computedAt: { type: string, format: date-time }
+
+  /catalog/supplies:
+    get:
+      tags: [Insumos]
+      summary: Listar insumos del maestro
+      description: HU-14
+      parameters:
+        - $ref: '#/components/parameters/q'
+        - name: grupo
+          in: query
+          schema:
+            type: string
+            enum: [MATERIAL, MANO_OBRA, EQUIPO, TRANSPORTE]
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200':
+          description: Listado paginado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Insumo' }
+                  pagina: { $ref: '#/components/schemas/Pagina' }
+
+  /catalog/supplies/{supplyId}/prices:
+    parameters:
+      - $ref: '#/components/parameters/supplyId'
+    get:
+      tags: [Insumos]
+      summary: Serie historica de precios
+      description: |
+        HU-14, decision H-08. El precio vigente es el ultimo registro de la serie.
+      responses:
+        '200':
+          description: Historial
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/PrecioHistorico' }
+    post:
+      tags: [Insumos]
+      summary: Registrar un precio nuevo
+      description: |
+        HU-14, decision H-08. Llamar primero con dryRun=true para obtener el
+        impacto y el confirmationToken. Una variacion superior al umbral de la
+        organizacion marca superaUmbral en true.
+      parameters:
+        - $ref: '#/components/parameters/dryRun'
+        - $ref: '#/components/parameters/ConfirmationToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [valor]
+              properties:
+                valor: { type: number, minimum: 0 }
+                motivo: { type: string }
+      responses:
+        '200':
+          description: Analisis de impacto (dryRun)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImpactoPrecio' }
+        '201':
+          description: Precio registrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrecioHistorico' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '428': { $ref: '#/components/responses/ConfirmacionRequerida' }
+
+  /catalog/supplies/{supplyId}/usage:
+    parameters:
+      - $ref: '#/components/parameters/supplyId'
+    get:
+      tags: [Insumos]
+      summary: Donde se usa un insumo
+      description: HU-15. Convierte el contador de la interfaz en informacion navegable.
+      parameters:
+        - name: projectId
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Uso del insumo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalApus: { type: integer }
+                  apus:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        descripcion: { type: string }
+                        rendimiento: { $ref: '#/components/schemas/Cantidad' }
+                  enProyectoActivo:
+                    type: object
+                    properties:
+                      actividades: { type: integer }
+                      valorAfectado: { $ref: '#/components/schemas/Dinero' }
+
+  /catalog/apus/import:
+    post:
+      tags: [Catalogo APU]
+      summary: Previsualizar una importacion de APUs
+      description: |
+        HU-13. No aplica nada: devuelve el resumen y un jobId que se confirma aparte.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                archivo: { type: string, format: binary }
+      responses:
+        '200':
+          description: Previsualizacion
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId: { type: string }
+                  nuevos: { type: integer }
+                  actualizados: { type: integer }
+                  conError: { type: integer }
+
+  /catalog/imports/{jobId}/confirm:
+    parameters:
+      - name: jobId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Catalogo APU]
+      summary: Aplicar el lote previsualizado
+      description: |
+        HU-13. Atomico: se aplica todo el lote valido o no se aplica nada.
+        Genera automaticamente un punto de restauracion previo.
+      responses:
+        '200':
+          description: Importacion aplicada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  aplicados: { type: integer }
+                  restorePointId: { type: string }
+
+  /projects/{projectId}/analytics/summary:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+    get:
+      tags: [Analitica]
+      summary: Panel principal del proyecto
+      description: |
+        HU-17, decision H-14. Se calcula al solicitarlo. No existe endpoint de
+        refresco obligatorio. Devuelve computedAt y ETag.
+      responses:
+        '200':
+          description: Resumen calculado
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResumenPanel' }
+        '304':
+          description: Sin cambios desde el ETag enviado
+
+  /projects/{projectId}/analytics/cost-intelligence:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+    get:
+      tags: [Analitica]
+      summary: Costo por metro cuadrado y composicion del gasto
+      description: HU-18. Si el proyecto no tiene area, los indicadores por m2 vienen en null.
+      responses:
+        '200':
+          description: Indicadores
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  computedAt: { type: string, format: date-time }
+                  costoDirectoPorM2: { $ref: '#/components/schemas/Dinero' }
+                  recursos:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        tipo: { type: string, enum: [MATERIALES, MANO_OBRA, EQUIPOS, TRANSPORTE] }
+                        valor: { $ref: '#/components/schemas/Dinero' }
+                        pct: { type: number }
+                        porM2: { $ref: '#/components/schemas/Dinero' }
+
+  /projects/{projectId}/analytics/consolidated:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+    get:
+      tags: [Analitica]
+      summary: Consolidado de recursos del proyecto
+      description: |
+        HU-19. Recorre todas las actividades y agrega por insumo. El total de cada
+        grupo debe cuadrar exactamente con el rubro del panel principal.
+      parameters:
+        - name: grupo
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [MATERIAL, MANO_OBRA, EQUIPO, TRANSPORTE]
+      responses:
+        '200':
+          description: Consolidado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  computedAt: { type: string, format: date-time }
+                  total: { $ref: '#/components/schemas/Dinero' }
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        insumoId: { type: string }
+                        descripcion: { type: string }
+                        unidad: { type: string }
+                        cantidadTotal: { $ref: '#/components/schemas/Cantidad' }
+                        valorUnitario: { $ref: '#/components/schemas/Dinero' }
+                        valorTotal: { $ref: '#/components/schemas/Dinero' }
+
+  /projects/{projectId}/analytics/alerts:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+    get:
+      tags: [Analitica]
+      summary: Desviaciones y avisos accionables
+      description: HU-18, decision H-16. Alimenta la franja de avisos del panel principal.
+      responses:
+        '200':
+          description: Alertas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        codigo:
+                          type: string
+                          enum: [PRECIO_DESACTUALIZADO, CANTIDAD_ATIPICA, APU_INCOMPLETO, COTIZACION_PENDIENTE]
+                        mensaje: { type: string }
+                        severidad: { type: string, enum: [INFO, ADVERTENCIA, ERROR] }
+                        recurso:
+                          type: object
+                          properties:
+                            tipo: { type: string }
+                            id: { type: string }
+
+  /projects/{projectId}/documents:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+    get:
+      tags: [Documentos]
+      summary: Historico de documentos del proyecto
+      description: HU-20
+      responses:
+        '200':
+          description: Documentos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Documento' }
+    post:
+      tags: [Documentos]
+      summary: Generar un documento
+      description: |
+        HU-20 y HU-21. Asincrono. El documento generado es inmutable y lleva una
+        referencia visible para poder citarlo en una conversacion con el cliente.
+        El PDF de cliente nunca incluye APUs, precios de insumos ni margen.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tipo]
+              properties:
+                tipo:
+                  type: string
+                  enum: [PDF_CLIENTE, PDF_INTERNO, PDF_COSTOS_APU, XLSX_PRESUPUESTO, XLSX_INSUMOS, XLSX_APUS]
+                opciones:
+                  type: object
+                  properties:
+                    incluirMemorias: { type: boolean, default: false }
+      responses:
+        '202':
+          description: Generacion encolada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Documento' }
+        '422': { $ref: '#/components/responses/Validacion' }
+
+  /documents/{documentId}:
+    parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Documentos]
+      summary: Estado y metadatos del documento
+      description: HU-20
+      responses:
+        '200':
+          description: Documento
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Documento' }
+
+  /documents/{documentId}/download:
+    parameters:
+      - name: documentId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Documentos]
+      summary: Descargar el archivo generado
+      description: HU-20
+      responses:
+        '200':
+          description: Binario del documento
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: { type: string, format: binary }
+        '409':
+          description: El documento aun se esta generando
+
+  /projects/{projectId}/quotations:
+    parameters:
+      - $ref: '#/components/parameters/projectId'
+    get:
+      tags: [Cotizacion]
+      summary: Obtener el listado de cotizaciones asociadas a un proyecto
+      description: HU-22.
+      responses:
+        '200':
+          description: Listado de cotizaciones
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Cotizacion' }
+    post:
+      tags: [Cotizacion]
+      summary: Generar una cotizacion desde el consolidado de materiales
+      description: HU-22. Todas las lineas arrancan en estado PENDIENTE.
+      responses:
+        '201':
+          description: Cotizacion creada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cotizacion' }
+
+  /quotations/{quotationId}/lines/{lineId}:
+    parameters:
+      - name: quotationId
+        in: path
+        required: true
+        schema: { type: string }
+      - name: lineId
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      tags: [Cotizacion]
+      summary: Registrar proveedor y precio cotizado
+      description: HU-22. Calcula la diferencia contra el precio presupuestado.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                proveedor: { type: string }
+                precioCotizado: { type: number, minimum: 0 }
+                estado:
+                  type: string
+                  enum: [PENDIENTE, COTIZADO, APROBADO, RECHAZADO]
+      responses:
+        '200':
+          description: Linea actualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  estado: { type: string }
+                  diferencia: { $ref: '#/components/schemas/Dinero' }
+                  diferenciaPct: { type: number }
+                  impactoProyecto: { $ref: '#/components/schemas/Dinero' }
+
+  /quotations/{quotationId}/lines/{lineId}/apply-price:
+    parameters:
+      - name: quotationId
+        in: path
+        required: true
+        schema: { type: string }
+      - name: lineId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Cotizacion]
+      summary: Llevar el precio cotizado al maestro de insumos
+      description: |
+        HU-22. Aplica el mismo patron de confirmacion de impacto que el cambio de
+        precio directo. El historial del insumo registra que el cambio vino de esta cotizacion.
+      parameters:
+        - $ref: '#/components/parameters/dryRun'
+        - $ref: '#/components/parameters/ConfirmationToken'
+      responses:
+        '200':
+          description: Analisis de impacto o precio aplicado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImpactoPrecio' }
+        '428': { $ref: '#/components/responses/ConfirmacionRequerida' }
+
+  /ai/query:
+    post:
+      tags: [IA]
+      summary: Consultar el asistente en modo local
+      description: |
+        HU-23. Responde solo con datos de la base propia. No llama a ningun modelo
+        externo, no acepta credenciales del usuario y no puede inventar precios.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [consulta]
+              properties:
+                consulta: { type: string }
+                projectId: { type: string }
+      responses:
+        '200':
+          description: Consulta resuelta
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  modo: { type: string, enum: [LOCAL] }
+                  apusRelacionados:
+                    type: array
+                    items: { $ref: '#/components/schemas/Apu' }
+                  actividadesEnProyecto:
+                    type: array
+                    items: { $ref: '#/components/schemas/Actividad' }
+                  origen: { type: string }
+
+  /ai/apu-proposals:
+    post:
+      tags: [IA]
+      summary: Generar una propuesta de APU con IA
+      description: |
+        HU-24, correccion del hallazgo H-04. La credencial del proveedor vive en el
+        servidor: el cliente nunca la envia ni la conoce. La propuesta no entra al
+        catalogo hasta que se acepta explicitamente.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [solicitud]
+              properties:
+                solicitud: { type: string }
+                capituloSugerido: { type: string }
+      responses:
+        '201':
+          description: Propuesta generada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PropuestaApu' }
+        '402':
+          description: Capacidad no habilitada o cuota agotada
+        '503':
+          description: Proveedor no disponible, usar modo local
+
+  /ai/apu-proposals/{proposalId}/accept:
+    parameters:
+      - name: proposalId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [IA]
+      summary: Aceptar la propuesta e incorporarla al catalogo
+      description: HU-24. Solo aqui se escribe en el catalogo, con origen GENERADO_IA.
+      responses:
+        '201':
+          description: APU creado a partir de la propuesta
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Apu' }
+
+  /org/branding:
+    get:
+      tags: [Marca]
+      summary: Configuracion de marca vigente
+      description: HU-25
+      responses:
+        '200':
+          description: Marca
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Marca' }
+    put:
+      tags: [Marca]
+      summary: Actualizar datos comerciales y color de acento
+      description: |
+        HU-25, descarte de los hallazgos H-01 y H-02. El color de acento debe
+        pertenecer a la paleta validada por contraste. No existen campos de
+        dimensiones ni de color de fondo de la aplicacion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Marca' }
+      responses:
+        '200':
+          description: Marca actualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Marca' }
+        '422': { $ref: '#/components/responses/Validacion' }
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    projectId:
+      name: projectId
+      in: path
+      required: true
+      schema: { type: string }
+      examples:
+        default: { value: proj_9f2a }
+    itemId:
+      name: itemId
+      in: path
+      required: true
+      schema: { type: string }
+    apuId:
+      name: apuId
+      in: path
+      required: true
+      schema: { type: string }
+    supplyId:
+      name: supplyId
+      in: path
+      required: true
+      schema: { type: string }
+    q:
+      name: q
+      in: query
+      description: Busqueda de texto, insensible a mayusculas y tildes
+      schema: { type: string }
+    limit:
+      name: limit
+      in: query
+      schema: { type: integer, default: 50, maximum: 200 }
+    cursor:
+      name: cursor
+      in: query
+      description: Cursor opaco devuelto por la pagina anterior
+      schema: { type: string }
+    dryRun:
+      name: dryRun
+      in: query
+      description: Si es true no aplica nada y devuelve solo el analisis de impacto
+      schema: { type: boolean, default: false }
+    IfMatch:
+      name: If-Match
+      in: header
+      description: ETag del recurso, para control de concurrencia optimista
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Clave generada por el cliente para evitar duplicados
+      schema: { type: string }
+    ConfirmationToken:
+      name: X-Confirmation-Token
+      in: header
+      description: Token devuelto por el analisis de impacto previo
+      schema: { type: string }
+
+  responses:
+    Validacion:
+      description: Error de validacion de reglas de negocio
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoAutenticado:
+      description: Token ausente, invalido o expirado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    SinPermiso:
+      description: El perfil del usuario no alcanza para esta operacion
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoEncontrado:
+      description: El recurso no existe o pertenece a otra organizacion
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflicto:
+      description: El estado actual impide la operacion
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ConflictoVersion:
+      description: El If-Match no coincide, otro usuario modifico el recurso
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ConfirmacionRequerida:
+      description: Falta el X-Confirmation-Token de una operacion con impacto
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+
+    Dinero:
+      type: string
+      description: Cadena decimal con dos decimales. Nunca coma flotante.
+      pattern: '^-?\d+\.\d{2}$'
+      examples: ['58696983.45']
+
+    Cantidad:
+      type: string
+      description: Cadena decimal con hasta cuatro decimales
+      examples: ['26.0400']
+
+    Pagina:
+      type: object
+      properties:
+        limit: { type: integer }
+        siguienteCursor: { type: string, nullable: true }
+        hayMas: { type: boolean }
+
+    Aviso:
+      type: object
+      description: Validacion blanda. Nunca bloquea la operacion.
+      properties:
+        codigo: { type: string, examples: [CANTIDAD_ATIPICA] }
+        mensaje: { type: string }
+        bloqueante: { type: boolean, default: false }
+
+    Error:
+      type: object
+      properties:
+        tipo:
+          type: string
+          enum: [PETICION_INVALIDA, NO_AUTENTICADO, SIN_PERMISO, NO_ENCONTRADO,
+                 CONFLICTO, EXPIRADO, CONFLICTO_VERSION, VALIDACION,
+                 CONFIRMACION_REQUERIDA, CUOTA_AGOTADA, DEMASIADAS_PETICIONES,
+                 SERVICIO_NO_DISPONIBLE]
+        mensaje: { type: string, description: Apto para mostrar al usuario }
+        traceId: { type: string }
+        errores:
+          type: array
+          items:
+            type: object
+            properties:
+              campo: { type: string }
+              codigo: { type: string }
+              esperado: { type: string }
+
+    Totales:
+      type: object
+      properties:
+        costoDirecto: { $ref: '#/components/schemas/Dinero' }
+        aiu: { $ref: '#/components/schemas/Dinero' }
+        iva: { $ref: '#/components/schemas/Dinero' }
+        descuento: { $ref: '#/components/schemas/Dinero' }
+        total: { $ref: '#/components/schemas/Dinero' }
+
+    ProyectoInput:
+      type: object
+      required: [nombre, areaM2]
+      properties:
+        nombre: { type: string, maxLength: 120 }
+        cliente: { type: string, maxLength: 120 }
+        ubicacion: { type: string, maxLength: 160 }
+        areaM2: { type: number, exclusiveMinimum: 0 }
+        tipoObra:
+          type: string
+          enum: [OBRA_NUEVA, REMODELACION, ADECUACION, MANTENIMIENTO]
+        fecha: { type: string, format: date }
+        descuento: { type: number, minimum: 0 }
+
+    Proyecto:
+      allOf:
+        - $ref: '#/components/schemas/ProyectoInput'
+        - type: object
+          properties:
+            id: { type: string }
+            estado:
+              type: string
+              enum: [BORRADOR, EN_REVISION, APROBADO, ARCHIVADO, PAPELERA]
+            costoDirecto: { $ref: '#/components/schemas/Dinero' }
+            total: { $ref: '#/components/schemas/Dinero' }
+            creadoEn: { type: string, format: date-time }
+            modificadoEn: { type: string, format: date-time }
+            version: { type: integer }
+
+    Actividad:
+      type: object
+      properties:
+        id: { type: string }
+        capitulo:
+          type: object
+          properties:
+            id: { type: string }
+            nombre: { type: string }
+        descripcion: { type: string }
+        unidad: { type: string, examples: [M2] }
+        cantidad: { $ref: '#/components/schemas/Cantidad' }
+        valorUnitario: { $ref: '#/components/schemas/Dinero' }
+        valorParcial: { $ref: '#/components/schemas/Dinero' }
+        apuSnapshotId: { type: string }
+        tieneMemoria: { type: boolean }
+        divergeDelCatalogo: { type: boolean }
+        avisos:
+          type: array
+          items: { $ref: '#/components/schemas/Aviso' }
+        totales: { $ref: '#/components/schemas/Totales' }
+
+    Componente:
+      type: object
+      properties:
+        insumoId: { type: string }
+        descripcion: { type: string }
+        grupo:
+          type: string
+          enum: [MATERIAL, MANO_OBRA, EQUIPO, TRANSPORTE]
+        unidad: { type: string }
+        rendimiento: { $ref: '#/components/schemas/Cantidad' }
+        costoUnitario: { $ref: '#/components/schemas/Dinero' }
+        subtotal: { $ref: '#/components/schemas/Dinero' }
+
+    ApuInput:
+      type: object
+      required: [descripcion, unidad, capituloId]
+      properties:
+        descripcion: { type: string, maxLength: 250 }
+        unidad: { type: string }
+        capituloId: { type: string }
+        componentes:
+          type: array
+          items:
+            type: object
+            required: [insumoId, rendimiento]
+            properties:
+              insumoId: { type: string }
+              rendimiento: { type: number, exclusiveMinimum: 0 }
+
+    Apu:
+      type: object
+      properties:
+        id: { type: string }
+        codigo: { type: string }
+        descripcion: { type: string }
+        unidad: { type: string }
+        capitulo:
+          type: object
+          properties:
+            id: { type: string }
+            nombre: { type: string }
+        costoUnitario:
+          $ref: '#/components/schemas/Dinero'
+        desglose:
+          type: object
+          properties:
+            materiales: { $ref: '#/components/schemas/Dinero' }
+            manoObra: { $ref: '#/components/schemas/Dinero' }
+            equipo: { $ref: '#/components/schemas/Dinero' }
+        componentes:
+          type: array
+          items: { $ref: '#/components/schemas/Componente' }
+        origen:
+          type: string
+          enum: [BASE, PERSONALIZADO, GENERADO_IA, IMPORTADO]
+        version: { type: integer }
+
+    ApuSnapshot:
+      type: object
+      description: Copia del APU que pertenece al proyecto (decision H-07)
+      properties:
+        snapshotId: { type: string }
+        descripcion: { type: string }
+        unidad: { type: string }
+        costoUnitario: { $ref: '#/components/schemas/Dinero' }
+        desglose:
+          type: object
+          properties:
+            materiales: { $ref: '#/components/schemas/Dinero' }
+            manoObra: { $ref: '#/components/schemas/Dinero' }
+            equipo: { $ref: '#/components/schemas/Dinero' }
+        componentes:
+          type: array
+          items: { $ref: '#/components/schemas/Componente' }
+        apuOrigenId: { type: string }
+        divergeDelCatalogo: { type: boolean }
+
+    Insumo:
+      type: object
+      properties:
+        id: { type: string }
+        descripcion: { type: string, maxLength: 200 }
+        unidad: { type: string }
+        grupo:
+          type: string
+          enum: [MATERIAL, MANO_OBRA, EQUIPO, TRANSPORTE]
+        valorUnitario: { $ref: '#/components/schemas/Dinero' }
+        usoEnApus: { type: integer, description: Calculado, no editable }
+
+    PrecioHistorico:
+      type: object
+      properties:
+        id: { type: string }
+        valor: { $ref: '#/components/schemas/Dinero' }
+        vigenteDesde: { type: string, format: date-time }
+        usuario:
+          type: object
+          properties:
+            id: { type: string }
+            nombre: { type: string }
+        motivo: { type: string }
+        origen:
+          type: string
+          enum: [MANUAL, IMPORTACION, COTIZACION]
+
+    Impacto:
+      type: object
+      properties:
+        proyectosActivos: { type: integer }
+        presupuestosBorrador: { type: integer }
+        presupuestosAprobados: { type: integer }
+        variacionUnitaria: { $ref: '#/components/schemas/Dinero' }
+        confirmationToken: { type: string }
+
+    ImpactoPrecio:
+      allOf:
+        - $ref: '#/components/schemas/Impacto'
+        - type: object
+          properties:
+            valorActual: { $ref: '#/components/schemas/Dinero' }
+            valorPropuesto: { $ref: '#/components/schemas/Dinero' }
+            variacionPct: { type: number }
+            superaUmbral: { type: boolean }
+            apus: { type: integer }
+            variacionTotalEstimada: { $ref: '#/components/schemas/Dinero' }
+
+    Aiu:
+      type: object
+      properties:
+        pctAdministracion: { type: number, minimum: 0, maximum: 100 }
+        pctImprevistos: { type: number, minimum: 0, maximum: 100 }
+        pctUtilidad: { type: number, minimum: 0, maximum: 100 }
+        ivaAplica: { type: boolean }
+        pctIva: { type: number, minimum: 0, maximum: 100, default: 19 }
+        baseIva:
+          type: string
+          enum: [TOTAL, AIU, UTILIDAD]
+        descuento: { type: number, minimum: 0 }
+
+    ResumenPanel:
+      type: object
+      properties:
+        computedAt: { type: string, format: date-time }
+        estadoVacio: { type: boolean }
+        actividades: { type: integer }
+        costoDirecto: { $ref: '#/components/schemas/Dinero' }
+        aiu:
+          type: object
+          properties:
+            valor: { $ref: '#/components/schemas/Dinero' }
+            pct: { type: number }
+        total: { $ref: '#/components/schemas/Dinero' }
+        costoPorM2:
+          oneOf:
+            - $ref: '#/components/schemas/Dinero'
+            - type: 'null'
+        recursos:
+          type: array
+          items:
+            type: object
+            properties:
+              tipo: { type: string }
+              valor: { $ref: '#/components/schemas/Dinero' }
+              pct: { type: number }
+              porM2: { $ref: '#/components/schemas/Dinero' }
+        capitulos:
+          type: array
+          description: Ordenados por participacion descendente por el servidor
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              nombre: { type: string }
+              valor: { $ref: '#/components/schemas/Dinero' }
+              pct: { type: number }
+              actividades: { type: integer }
+
+    Documento:
+      type: object
+      properties:
+        id: { type: string }
+        referencia: { type: string, examples: [PR-2026-0184] }
+        tipo: { type: string }
+        estado:
+          type: string
+          enum: [GENERANDO, LISTO, ERROR]
+        generadoEn: { type: string, format: date-time }
+        generadoPor: { type: string }
+        totalCongelado: { $ref: '#/components/schemas/Dinero' }
+        vigente:
+          type: boolean
+          description: false si el presupuesto cambio despues de generarlo
+
+    Cotizacion:
+      type: object
+      properties:
+        id: { type: string }
+        creadaEn: { type: string, format: date-time }
+        lineas:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              insumoId: { type: string }
+              descripcion: { type: string }
+              unidad: { type: string }
+              cantidadTotal: { $ref: '#/components/schemas/Cantidad' }
+              precioPresupuestado: { $ref: '#/components/schemas/Dinero' }
+              proveedor: { type: string, nullable: true }
+              precioCotizado:
+                oneOf:
+                  - $ref: '#/components/schemas/Dinero'
+                  - type: 'null'
+              estado:
+                type: string
+                enum: [PENDIENTE, COTIZADO, APROBADO, RECHAZADO]
+
+    PropuestaApu:
+      type: object
+      properties:
+        id: { type: string }
+        descripcion: { type: string }
+        unidad: { type: string }
+        costoCalculado: { $ref: '#/components/schemas/Dinero' }
+        componentes:
+          type: array
+          items:
+            type: object
+            properties:
+              insumoId: { type: string, nullable: true }
+              existe: { type: boolean }
+              rendimiento: { type: number }
+              precio: { $ref: '#/components/schemas/Dinero' }
+              nuevo:
+                type: object
+                nullable: true
+                properties:
+                  descripcion: { type: string }
+                  unidad: { type: string }
+                  precioSugerido: { $ref: '#/components/schemas/Dinero' }
+        cuotaRestante: { type: integer }
+
+    Marca:
+      type: object
+      description: |
+        Alcance acotado deliberadamente (descarte de H-01 y H-02). No existen
+        campos de altura de barra, tamano de logo ni color de fondo de la aplicacion.
+      properties:
+        razonSocial: { type: string }
+        nombreComercial: { type: string }
+        nit: { type: string }
+        ciudad: { type: string }
+        correoSoporte: { type: string, format: email }
+        sitioWeb: { type: string, format: uri }
+        logoUrl: { type: string, format: uri, readOnly: true }
+        colorAcento:
+          type: string
+          description: Debe pertenecer a la paleta validada por contraste
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        plantillaDocumento:
+          type: string
+          enum: [CLASICA, COMPACTA, EDITORIAL]

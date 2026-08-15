@@ -51,6 +51,8 @@ services:
         value: https://element-public.onrender.com
       - key: TILE_CALCULATOR_URL
         value: https://element-tile.onrender.com
+      - key: COSTOS_URL
+        value: https://element-costos.onrender.com
       - fromGroup: element-secrets
 
   - type: web
@@ -194,4 +196,23 @@ services:
         value: 3007
       - key: TILE_CALCULATOR_DATABASE_SCHEMA
         value: tile_calculator
+      - fromGroup: element-secrets
+
+  - type: web
+    name: element-costos
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: services/cost-service
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://cotzador-elemt.vercel.app
+      - key: PORT
+        value: 3008
+      - key: COST_DATABASE_SCHEMA
+        value: cost_pro
       - fromGroup: element-secrets
