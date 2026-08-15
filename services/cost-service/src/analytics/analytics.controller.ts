@@ -15,11 +15,11 @@ import { AnalyticsService } from './analytics.service';
 
 const GRUPOS = ['MATERIAL', 'MANO_OBRA', 'EQUIPO', 'TRANSPORTE'];
 
-@Controller('costos/analytics')
+@Controller('costos/projects/:projectId/analytics')
 export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
 
-  @Get('projects/:projectId/summary')
+  @Get('summary')
   async resumen(
     @CurrentUser() user: CurrentUserData,
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -38,7 +38,7 @@ export class AnalyticsController {
     return res.set('ETag', data.etag).header('Cache-Control', 'no-cache').json({ data });
   }
 
-  @Get('projects/:projectId/by-chapters')
+  @Get('by-chapters')
   porCapitulos(
     @CurrentUser() user: CurrentUserData,
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -46,7 +46,7 @@ export class AnalyticsController {
     return this.analyticsService.porCapitulos(user.shop_id, user.customer_id, projectId);
   }
 
-  @Get('projects/:projectId/consolidated')
+  @Get('consolidated')
   consolidado(
     @CurrentUser() user: CurrentUserData,
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -61,7 +61,7 @@ export class AnalyticsController {
     return this.analyticsService.consolidado(user.shop_id, user.customer_id, projectId, grupo as any);
   }
 
-  @Get('projects/:projectId/cost-intelligence')
+  @Get('cost-intelligence')
   costIntelligence(
     @CurrentUser() user: CurrentUserData,
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -69,7 +69,7 @@ export class AnalyticsController {
     return this.analyticsService.costIntelligence(user.shop_id, user.customer_id, projectId);
   }
 
-  @Get('projects/:projectId/alerts')
+  @Get('alerts')
   alerts(
     @CurrentUser() user: CurrentUserData,
     @Param('projectId', ParseUUIDPipe) projectId: string,

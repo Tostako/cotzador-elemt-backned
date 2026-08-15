@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   Headers,
   Param,
   ParseUUIDPipe,
@@ -15,6 +16,14 @@ import { RegistrarLineaCotizacionDto } from './quotations.dto';
 @Controller('costos')
 export class QuotationsController {
   constructor(private readonly quotationsService: QuotationsService) {}
+
+  @Get('projects/:projectId/quotations')
+  listarPorProyecto(
+    @CurrentUser() user: CurrentUserData,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+  ) {
+    return this.quotationsService.listarPorProyecto(user.shop_id, user.customer_id, projectId);
+  }
 
   @Post('projects/:projectId/quotations')
   crear(

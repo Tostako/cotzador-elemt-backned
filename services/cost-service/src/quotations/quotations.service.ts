@@ -273,4 +273,21 @@ export class QuotationsService {
 
     return { ...impacto, confirmation_token: token, aplicado: true, precio: fromCents(valorPropuestoCents) };
   }
+
+  /**
+   * HU-22. Obtiene el listado de cotizaciones asociadas a un proyecto.
+   */
+  async listarPorProyecto(shopId: string, customerId: string, projectId: string) {
+    const project = await this.projectRepo.findOne({
+      where: { id: projectId, shop_id: shopId, customer_id: customerId, deleted_at: null },
+    });
+    if (!project) throw new NotFoundException('Proyecto no encontrado');
+
+    const quotations = await this.quotationRepo.find({
+      where: { shop_id: shopId, project_id: projectId, customer_id: customerId },
+      order: { creada_en: 'DESC' },
+    });
+
+    return Promise.all(quotations.map((q) => this.aContrato(q)));
+  }
 }

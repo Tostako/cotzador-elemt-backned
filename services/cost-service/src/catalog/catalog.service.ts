@@ -16,6 +16,7 @@ import { ApuComponent } from '../entities/apu-component.entity';
 import { BudgetItem } from '../entities/budget-item.entity';
 import { Project } from '../entities/project.entity';
 import { Supply, GrupoInsumo } from '../entities/supply.entity';
+import { SupplyPrice, OrigenPrecio } from '../entities/supply-price.entity';
 import { CostEngine } from '../cost-engine/cost-engine.service';
 import { fromCents, toCents } from '../common/money';
 import {
@@ -57,6 +58,7 @@ interface FilaInsumoImportacion {
   descripcion: string;
   unidad: string;
   grupo: string;
+  precio: number | null;
   error: string | null;
   nuevo: boolean;
 }
@@ -82,8 +84,24 @@ export class CatalogService {
     @InjectRepository(BudgetItem) private readonly itemRepo: Repository<BudgetItem>,
     @InjectRepository(Project) private readonly projectRepo: Repository<Project>,
     @InjectRepository(Supply) private readonly supplyRepo: Repository<Supply>,
+    @InjectRepository(SupplyPrice) private readonly priceRepo: Repository<SupplyPrice>,
     private readonly costEngine: CostEngine,
   ) {}
+
+  /** Extrae el detalle de filas con error en forma legible. */
+  private detalleErrores(filas: Array<{ fila: number; error: string | null }>): Array<{ fila: number; error: string }> {
+    return filas.filter((f) => f.error).map((f) => ({ fila: f.fila, error: f.error! }));
+  }
+
+  /** Mensaje de error que incluye las filas y motivos (no solo el conteo). */
+  private mensajeErrores(conError: number, detalle: Array<{ fila: number; error: string }>): string {
+    const lista = detalle
+      .slice(0, 10)
+      .map((d) => `fila ${d.fila}: ${d.error}`)
+      .join('; ');
+    const mas = detalle.length > 10 ? ` y ${detalle.length - 10} más` : '';
+    return `Hay ${conError} fila(s) con error (${lista}${mas}). Corrija el archivo e importe de nuevo.`;
+  }
 
   private readonly importJobs = new Map<string, JobImportacion | JobInsumoImportacion>();
 
@@ -132,6 +150,86 @@ export class CatalogService {
 
   // ---- APUs ---------------------------------------------------------------
 
+  async poblarApus(shopId: string, apus: Apu[]) {
+    if (!apus.length) return [];
+
+    const apuIds = apus.map((a) => a.id);
+
+    // 1. Obtener componentes
+    const componentes = await this.componentRepo.find({
+      where: { apu_id: In(apuIds) },
+    });
+
+    // 2. Obtener insumos
+    const insumoIds = [...new Set(componentes.map((c) => c.insumo_id))];
+    const insumos = insumoIds.length
+      ? await this.supplyRepo.find({ where: { id: In(insumoIds), shop_id: shopId } })
+      : [];
+    const supplyMap = new Map(insumos.map((s) => [s.id, s]));
+
+    // 3. Obtener precios vigentes
+    const priceMap = new Map<string, string>();
+    for (const id of insumoIds) {
+      const p = await this.costEngine.precioVigente(id);
+      priceMap.set(id, p.valor);
+    }
+
+    // 4. Agrupar componentes por APU
+    const compMap = new Map<string, any[]>();
+    for (const c of componentes) {
+      const insumo = supplyMap.get(c.insumo_id);
+      if (!insumo) continue;
+
+      const precio = priceMap.get(c.insumo_id) ?? '0.00';
+      const subtotalCents = Math.round(toCents(precio) * parseCantidad(c.rendimiento));
+      const subtotal = fromCents(subtotalCents);
+
+      const mappedComp = {
+        insumo_id: c.insumo_id,
+        insumoId: c.insumo_id,
+        descripcion: insumo.descripcion,
+        grupo: insumo.grupo,
+        unidad: insumo.unidad,
+        rendimiento: c.rendimiento,
+        valor: precio,
+        costo_unitario: precio,
+        costoUnitario: precio,
+        subtotal: subtotal,
+      };
+
+      const list = compMap.get(c.apu_id) ?? [];
+      list.push(mappedComp);
+      compMap.set(c.apu_id, list);
+    }
+
+    // 5. Obtener capítulos
+    const chapterIds = apus.map((a) => a.chapter_id).filter((id): id is string => !!id);
+    const chapters = chapterIds.length ? await this.chapterRepo.find({ where: { id: In(chapterIds) } }) : [];
+    const chapterMap = new Map(chapters.map((c) => [c.id, c]));
+
+    return apus.map((a) => {
+      const comps = compMap.get(a.id) ?? [];
+      const totalCents = comps.reduce((s, c) => s + toCents(c.subtotal), 0);
+      const ch = a.chapter_id ? chapterMap.get(a.chapter_id) : null;
+
+      const desglose = {
+        materiales: fromCents(comps.filter((c) => c.grupo === 'MATERIAL').reduce((s, c) => s + toCents(c.subtotal), 0)),
+        manoObra: fromCents(comps.filter((c) => c.grupo === 'MANO_OBRA').reduce((s, c) => s + toCents(c.subtotal), 0)),
+        equipo: fromCents(comps.filter((c) => c.grupo === 'EQUIPO').reduce((s, c) => s + toCents(c.subtotal), 0)),
+        transporte: fromCents(comps.filter((c) => c.grupo === 'TRANSPORTE').reduce((s, c) => s + toCents(c.subtotal), 0)),
+      };
+
+      return {
+        ...a,
+        capitulo: ch ? { id: ch.id, nombre: ch.nombre } : null,
+        componentes: comps,
+        costo_unitario: fromCents(totalCents),
+        costoUnitario: fromCents(totalCents),
+        desglose,
+      };
+    });
+  }
+
   async listarApus(shopId: string, opts: { chapter_id?: string; q?: string; page?: number; per_page?: number }) {
     const page = Math.max(1, Number(opts.page ?? 1));
     const perPage = Math.min(100, Math.max(1, Number(opts.per_page ?? 20)));
@@ -154,17 +252,66 @@ export class CatalogService {
       .take(perPage)
       .getManyAndCount();
 
-    return { items: rows, total, page, per_page: perPage, total_pages: Math.ceil(total / perPage) };
+    const itemsPoblados = await this.poblarApus(shopId, rows);
+    return { items: itemsPoblados, total, page, per_page: perPage, total_pages: Math.ceil(total / perPage) };
+  }
+
+  /**
+   * Exporta el catálogo de APUs (filtrado por chapter_id/q) a XLSX, en el mismo
+   * formato que acepta la importación (round-trip). Genera el archivo en el
+   * servidor y lo devuelve como buffer para streaming; no pagina.
+   */
+  async exportarApus(shopId: string, opts: { chapter_id?: string; q?: string }): Promise<Buffer> {
+    const qb = this.apuRepo
+      .createQueryBuilder('a')
+      .where('a.shop_id = :shopId', { shopId })
+      .andWhere('a.deleted_at IS NULL')
+      .orderBy('a.codigo', 'ASC');
+    if (opts.chapter_id) qb.andWhere('a.chapter_id = :chapterId', { chapterId: opts.chapter_id });
+    if (opts.q) qb.andWhere('(a.codigo ILIKE :q OR a.descripcion ILIKE :q)', { q: `%${opts.q}%` });
+    const apus = await qb.getMany();
+
+    const chapterIds = apus.map((a) => a.chapter_id).filter((id): id is string => !!id);
+    const chapters = chapterIds.length ? await this.chapterRepo.find({ where: { id: In(chapterIds) } }) : [];
+    const mapCap = new Map(chapters.map((c) => [c.id, c.nombre]));
+
+    const apuIds = apus.map((a) => a.id);
+    const componentes = apuIds.length ? await this.componentRepo.find({ where: { apu_id: In(apuIds) } }) : [];
+    const insumoIds = [...new Set(componentes.map((c) => c.insumo_id))];
+    const insumos = insumoIds.length ? await this.supplyRepo.find({ where: { id: In(insumoIds) } }) : [];
+    const mapIns = new Map(insumos.map((s) => [s.id, s.descripcion]));
+
+    const compPorApu = new Map<string, string[]>();
+    for (const c of componentes) {
+      const desc = mapIns.get(c.insumo_id) ?? '?';
+      const lista = compPorApu.get(c.apu_id) ?? [];
+      lista.push(`${desc}:${c.rendimiento}`);
+      compPorApu.set(c.apu_id, lista);
+    }
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('APUs');
+    ws.addRow(['codigo', 'descripcion', 'unidad', 'capitulo', 'componentes']);
+    for (const a of apus) {
+      ws.addRow([
+        a.codigo,
+        a.descripcion,
+        a.unidad,
+        a.chapter_id ? (mapCap.get(a.chapter_id) ?? '') : '',
+        (compPorApu.get(a.id) ?? []).join('; '),
+      ]);
+    }
+    return Buffer.from(await wb.xlsx.writeBuffer());
   }
 
   async obtenerApu(shopId: string, id: string) {
     const apu = await this.apuRepo.findOne({ where: { id, shop_id: shopId, deleted_at: null } });
     if (!apu) throw new NotFoundException('APU no encontrado');
 
-    const componentes = await this.componentRepo.find({ where: { apu_id: id } });
+    const [poblado] = await this.poblarApus(shopId, [apu]);
     const calculo = await this.costEngine.costoApu(id);
 
-    return { ...apu, componentes, costo_unitario: calculo.costo_unitario, avisos: calculo.avisos };
+    return { ...poblado, avisos: calculo.avisos };
   }
 
   async crearApu(shopId: string, dto: CreateApuDto) {
@@ -426,17 +573,6 @@ export class CatalogService {
 
   // ---- HU-13: importación masiva de APUs (XLSX) ---------------------------
 
-  /** Resuelve el capítulo por nombre exacto (case-insensitive) dentro del shop. */
-  private async resolverCapitulo(shopId: string, nombre?: string): Promise<string | null> {
-    if (!nombre || !nombre.trim()) return null;
-    const chapter = await this.chapterRepo
-      .createQueryBuilder('c')
-      .where('c.shop_id = :shopId', { shopId })
-      .andWhere('LOWER(c.nombre) = LOWER(:nombre)', { nombre: nombre.trim() })
-      .getOne();
-    return chapter?.id ?? null;
-  }
-
   /**
    * HU-13. Previsualiza una importación de APUs desde un XLSX. No aplica nada:
    * devuelve un jobId que se confirma aparte.
@@ -447,34 +583,47 @@ export class CatalogService {
    */
   async previsualizarImportacion(shopId: string, buffer: Buffer) {
     let workbook: ExcelJS.Workbook;
+    let hoja: ExcelJS.Worksheet | undefined;
+    const crudas: Array<{ fila: number; celdas: string[] }> = [];
     try {
       workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
-    } catch {
+      hoja = workbook.worksheets[0];
+      if (!hoja) {
+        throw new BadRequestException({
+          error: 'ARCHIVO_VACIO',
+          mensaje: 'El XLSX no contiene hojas',
+        });
+      }
+      hoja.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        const vals = row.values as Array<unknown>;
+        const celdas = (vals ?? []).slice(1).map((v) => (v != null ? String(v).trim() : ''));
+        crudas.push({ fila: rowNumber, celdas });
+      });
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
       throw new BadRequestException({
-        error: 'ARCHIVO_INVALIDO',
-        mensaje: 'El archivo no es un XLSX válido',
+        error: 'ARCHIVO_NO_COMPATIBLE',
+        mensaje:
+          'El archivo no es compatible. Sube un XLSX (.xlsx) con la hoja de APUs y las columnas codigo, descripcion, unidad, capitulo, componentes.',
       });
     }
 
-    const hoja = workbook.worksheets[0];
-    if (!hoja) {
-      throw new BadRequestException({
-        error: 'ARCHIVO_VACIO',
-        mensaje: 'El XLSX no contiene hojas',
-      });
-    }
+    // Cargas masivas (3 queries) para resolver capítulos, insumos y APUs
+    // existentes sin hacer N consultas por fila.
+    const chapters = await this.chapterRepo.find({ where: { shop_id: shopId } });
+    const mapCapitulos = new Map<string, string>();
+    for (const c of chapters) mapCapitulos.set(c.nombre.toLowerCase(), c.id);
 
-    // 1. Lectura síncrona: extrae filas crudas (encabezado en fila 1).
-    const crudas: Array<{ fila: number; celdas: string[] }> = [];
-    hoja.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return;
-      const vals = row.values as Array<unknown>;
-      const celdas = (vals ?? []).slice(1).map((v) => (v != null ? String(v).trim() : ''));
-      crudas.push({ fila: rowNumber, celdas });
-    });
+    const insumos = await this.supplyRepo.find({ where: { shop_id: shopId } });
+    const mapInsumos = new Map<string, string>();
+    for (const s of insumos) mapInsumos.set(s.descripcion.toLowerCase(), s.id);
 
-    // 2. Procesado asíncrono: validar y resolver capítulos/insumos.
+    const apus = await this.apuRepo.find({ where: { shop_id: shopId, deleted_at: null } });
+    const mapApus = new Map<string, boolean>();
+    for (const a of apus) mapApus.set(a.codigo, true);
+
     const filas: FilaImportacion[] = [];
     const codigosVistos = new Map<string, number>();
 
@@ -508,25 +657,18 @@ export class CatalogService {
             error = `Componente "${parte}" inválido`;
             break;
           }
-          const insumo = await this.supplyRepo
-            .createQueryBuilder('s')
-            .where('s.shop_id = :shopId', { shopId })
-            .andWhere('LOWER(s.descripcion) = LOWER(:desc)', { desc: descInsumo })
-            .getOne();
-          if (!insumo) {
+          const insumoId = mapInsumos.get(descInsumo.toLowerCase());
+          if (!insumoId) {
             error = `Insumo "${descInsumo}" no existe en el maestro`;
             break;
           }
-          componentes.push({ insumo_id: insumo.id, rendimiento: String(rend) });
+          componentes.push({ insumo_id: insumoId, rendimiento: String(rend) });
         }
       }
 
-      const chapterId = await this.resolverCapitulo(shopId, capitulo);
-      const existe = codigo
-        ? await this.apuRepo.findOne({
-            where: { shop_id: shopId, codigo, deleted_at: null },
-          })
-        : null;
+      const chapterId =
+        !error && capitulo ? mapCapitulos.get(capitulo.trim().toLowerCase()) ?? null : null;
+      const existe = !error && codigo ? mapApus.has(codigo) : false;
 
       filas.push({
         fila,
@@ -562,6 +704,7 @@ export class CatalogService {
       nuevos,
       actualizados,
       con_error: conError,
+      filas_con_error: this.detalleErrores(filas),
       expira_en: JOB_TTL_MS,
     };
   }
@@ -582,10 +725,11 @@ export class CatalogService {
 
     const validas = job.filas.filter((f) => !f.error);
     if (job.conError > 0) {
+      const detalle = this.detalleErrores(job.filas);
       throw new UnprocessableEntityException({
         error: 'LOTE_CON_ERRORES',
-        mensaje: `Hay ${job.conError} fila(s) con error. Corrija el archivo e importe de nuevo.`,
-        filas_con_error: job.filas.filter((f) => f.error).map((f) => ({ fila: f.fila, error: f.error })),
+        mensaje: this.mensajeErrores(job.conError, detalle),
+        filas_con_error: detalle,
       });
     }
     this.importJobs.delete(jobId);
@@ -605,33 +749,24 @@ export class CatalogService {
       version: a.version,
     }));
 
-    let aplicados = 0;
-    try {
-      for (const f of validas) {
-        const existente = await this.apuRepo.findOne({
-          where: { shop_id: shopId, codigo: f.codigo, deleted_at: null },
-        });
+    // Mapa de APUs existentes (vienen en `previos`) para no consultar por fila.
+    const mapExistente = new Map<string, Apu>();
+    for (const a of previos) mapExistente.set(a.codigo, a);
 
-        if (existente) {
-          existente.descripcion = f.descripcion;
-          existente.unidad = f.unidad;
-          if (f.chapter_id !== undefined) existente.chapter_id = f.chapter_id;
-          existente.version = existente.version + 1;
-          await this.apuRepo.save(existente);
-          await this.componentRepo.delete({ apu_id: existente.id });
-          if (f.componentes.length) {
-            await this.componentRepo.save(
-              f.componentes.map((c) =>
-                this.componentRepo.create({
-                  apu_id: existente.id,
-                  insumo_id: c.insumo_id,
-                  rendimiento: c.rendimiento,
-                }),
-              ),
-            );
-          }
-        } else {
-          const apu = this.apuRepo.create({
+    // Separar creaciones de actualizaciones.
+    const aCrear: Apu[] = [];
+    const aActualizar: Apu[] = [];
+    for (const f of validas) {
+      const existente = mapExistente.get(f.codigo);
+      if (existente) {
+        existente.descripcion = f.descripcion;
+        existente.unidad = f.unidad;
+        existente.chapter_id = f.chapter_id;
+        existente.version = existente.version + 1;
+        aActualizar.push(existente);
+      } else {
+        aCrear.push(
+          this.apuRepo.create({
             shop_id: shopId,
             chapter_id: f.chapter_id,
             codigo: f.codigo,
@@ -639,22 +774,60 @@ export class CatalogService {
             unidad: f.unidad,
             origen: OrigenApu.IMPORTADO,
             version: 1,
-          });
-          const guardado = await this.apuRepo.save(apu);
-          if (f.componentes.length) {
-            await this.componentRepo.save(
-              f.componentes.map((c) =>
-                this.componentRepo.create({
-                  apu_id: guardado.id,
-                  insumo_id: c.insumo_id,
-                  rendimiento: c.rendimiento,
-                }),
-              ),
-            );
-          }
-        }
-        aplicados += 1;
+          }),
+        );
       }
+    }
+
+    let creadosIds: string[] = [];
+    try {
+      // Inserción masiva de nuevos APUs (1 statement).
+      if (aCrear.length) {
+        const raw = await this.apuRepo
+          .createQueryBuilder()
+          .insert()
+          .values(aCrear)
+          .returning('*')
+          .execute();
+        const creados = (raw.raw ?? []) as Apu[];
+        creadosIds = creados.map((c) => c.id);
+        for (const c of creados) mapExistente.set(c.codigo, c);
+      }
+      // Actualizar existentes (1 llamada).
+      if (aActualizar.length) {
+        await this.apuRepo.save(aActualizar);
+      }
+
+      // Construir todos los componentes y resolver apu_id por código.
+      const todosApusIds: string[] = [];
+      const componentes: ApuComponent[] = [];
+      for (const f of validas) {
+        const apu = mapExistente.get(f.codigo)!;
+        todosApusIds.push(apu.id);
+        for (const c of f.componentes) {
+          componentes.push(
+            this.componentRepo.create({
+              apu_id: apu.id,
+              insumo_id: c.insumo_id,
+              rendimiento: c.rendimiento,
+            }),
+          );
+        }
+      }
+
+      // Reemplazo masivo de componentes: borra los previos y reinserta (2 statements).
+      if (todosApusIds.length) {
+        await this.componentRepo.delete({ apu_id: In(todosApusIds) });
+        if (componentes.length) {
+          await this.componentRepo.insert(componentes);
+        }
+      }
+
+      return {
+        aplicados: validas.length,
+        restore_point_id: restorePointId,
+        punto_restauracion: estadoPrevio,
+      };
     } catch (err) {
       // Rollback manual: restaurar los APUs previos y borrar los creados.
       for (const a of previos) {
@@ -667,29 +840,15 @@ export class CatalogService {
           await this.apuRepo.save(apu);
         }
       }
-      const codigosNuevos = validas
-        .filter((f) => !previos.some((p) => p.codigo === f.codigo))
-        .map((f) => f.codigo);
-      if (codigosNuevos.length) {
-        const creados = await this.apuRepo.find({
-          where: { shop_id: shopId, codigo: In(codigosNuevos), origen: OrigenApu.IMPORTADO },
-        });
-        for (const c of creados) {
-          await this.componentRepo.delete({ apu_id: c.id });
-          await this.apuRepo.delete({ id: c.id });
-        }
+      if (creadosIds.length) {
+        await this.componentRepo.delete({ apu_id: In(creadosIds) });
+        await this.apuRepo.delete({ id: In(creadosIds) });
       }
       throw new UnprocessableEntityException({
         error: 'IMPORTACION_FALLIDA',
         mensaje: 'La importación falló y fue revertida por completo',
       });
     }
-
-    return {
-      aplicados,
-      restore_point_id: restorePointId,
-      punto_restauracion: estadoPrevio,
-    };
   }
 
   // ---- Importación masiva de insumos (mismo registro de jobs que APUs) ----
@@ -723,47 +882,65 @@ export class CatalogService {
 
   /**
    * Formato de hoja "Insumos" (o primera hoja): columnas descripcion, unidad,
-   * grupo (MATERIAL, MANO_OBRA, EQUIPO o TRANSPORTE). Una fila por insumo; si
-   * la descripción ya existe en el shop se marca como actualizado.
+   * grupo (MATERIAL, MANO_OBRA, EQUIPO o TRANSPORTE) y precio (opcional, número
+   * >= 0). Una fila por insumo; si la descripción ya existe en el shop se marca
+   * como actualizado. El precio alimenta el precio vigente (no duplica si ya
+   * rige el mismo valor).
    */
   async previsualizarImportacionInsumos(shopId: string, buffer: Buffer) {
     let workbook: ExcelJS.Workbook;
+    let hoja: ExcelJS.Worksheet | undefined;
+    const crudas: Array<{ fila: number; celdas: string[] }> = [];
     try {
       workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
-    } catch {
+      hoja =
+        workbook.worksheets.find((w) => w.name.toLowerCase().replace(/[^a-z]/g, '') === 'insumos') ??
+        workbook.worksheets[0];
+      if (!hoja) {
+        throw new BadRequestException({
+          error: 'ARCHIVO_VACIO',
+          mensaje: 'El XLSX no contiene hojas',
+        });
+      }
+      hoja.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        const vals = row.values as Array<unknown>;
+        const celdas = (vals ?? []).slice(1).map((v) => (v != null ? String(v).trim() : ''));
+        crudas.push({ fila: rowNumber, celdas });
+      });
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
       throw new BadRequestException({
-        error: 'ARCHIVO_INVALIDO',
-        mensaje: 'El archivo no es un XLSX válido',
+        error: 'ARCHIVO_NO_COMPATIBLE',
+        mensaje:
+          'El archivo no es compatible. Sube un XLSX (.xlsx) con la hoja "Insumos" y las columnas descripcion, unidad, grupo, precio.',
       });
     }
 
-    const hoja =
-      workbook.worksheets.find((w) => w.name.toLowerCase().replace(/[^a-z]/g, '') === 'insumos') ??
-      workbook.worksheets[0];
-    if (!hoja) {
-      throw new BadRequestException({
-        error: 'ARCHIVO_VACIO',
-        mensaje: 'El XLSX no contiene hojas',
-      });
-    }
-
-    const crudas: Array<{ fila: number; celdas: string[] }> = [];
-    hoja.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return;
-      const vals = row.values as Array<unknown>;
-      const celdas = (vals ?? []).slice(1).map((v) => (v != null ? String(v).trim() : ''));
-      crudas.push({ fila: rowNumber, celdas });
-    });
+    // Carga masiva de insumos existentes (1 query) para resolver "nuevo" sin
+    // hacer N consultas por fila.
+    const existentes = await this.supplyRepo.find({ where: { shop_id: shopId } });
+    const descExistentes = new Set(existentes.map((s) => s.descripcion.toLowerCase()));
 
     const filas: FilaInsumoImportacion[] = [];
     const vistos = new Map<string, number>();
 
     for (const { fila, celdas } of crudas) {
-      const [descripcion, unidad, grupo] = celdas;
-      if (!descripcion && !unidad && !grupo) continue;
+      const [descripcion, unidad, grupo, precioRaw] = celdas;
+      if (!descripcion && !unidad && !grupo && !precioRaw) continue;
 
       let error: string | null = null;
+      let precio: number | null = null;
+      if (precioRaw && precioRaw !== '') {
+        const n = Number(String(precioRaw).replace(',', '.'));
+        if (Number.isNaN(n) || n < 0) {
+          error = `Precio "${precioRaw}" inválido (debe ser un número mayor o igual a 0)`;
+        } else {
+          precio = n;
+        }
+      }
+
       if (!descripcion) error = 'Falta la descripción';
       else if (!unidad) error = 'Falta la unidad';
       else if (!grupo) error = 'Falta el grupo';
@@ -778,20 +955,14 @@ export class CatalogService {
         error = `Grupo "${grupo}" inválido (use MATERIAL, MANO_OBRA, EQUIPO o TRANSPORTE)`;
       }
 
-      let existe = false;
-      if (!error) {
-        existe = !!(await this.supplyRepo
-          .createQueryBuilder('s')
-          .where('s.shop_id = :shopId', { shopId })
-          .andWhere('LOWER(s.descripcion) = LOWER(:desc)', { desc: descripcion })
-          .getOne());
-      }
+      const existe = !error && descExistentes.has(clave);
 
       filas.push({
         fila,
         descripcion: descripcion || '',
         unidad: unidad || '',
         grupo: grupo ? grupo.toUpperCase() : '',
+        precio,
         error,
         nuevo: !existe,
       });
@@ -800,6 +971,7 @@ export class CatalogService {
     const conError = filas.filter((f) => f.error).length;
     const nuevos = filas.filter((f) => !f.error && f.nuevo).length;
     const actualizados = filas.filter((f) => !f.error && !f.nuevo).length;
+    const conPrecio = filas.filter((f) => !f.error && f.precio != null).length;
 
     const jobId = randomUUID();
     const job: JobInsumoImportacion = {
@@ -818,6 +990,8 @@ export class CatalogService {
       nuevos,
       actualizados,
       con_error: conError,
+      con_precio: conPrecio,
+      filas_con_error: this.detalleErrores(filas),
       expira_en: JOB_TTL_MS,
     };
   }
@@ -835,10 +1009,11 @@ export class CatalogService {
 
     const validas = job.filas.filter((f) => !f.error);
     if (job.conError > 0) {
+      const detalle = this.detalleErrores(job.filas);
       throw new UnprocessableEntityException({
         error: 'LOTE_CON_ERRORES',
-        mensaje: `Hay ${job.conError} fila(s) con error. Corrija el archivo e importe de nuevo.`,
-        filas_con_error: job.filas.filter((f) => f.error).map((f) => ({ fila: f.fila, error: f.error })),
+        mensaje: this.mensajeErrores(job.conError, detalle),
+        filas_con_error: detalle,
       });
     }
     this.importJobs.delete(jobId);
@@ -859,33 +1034,120 @@ export class CatalogService {
       grupo: s.grupo,
     }));
 
-    let aplicados = 0;
-    const creadosIds: string[] = [];
-    try {
-      for (const f of validas) {
-        const existente = await this.supplyRepo
-          .createQueryBuilder('s')
-          .where('s.shop_id = :shopId', { shopId })
-          .andWhere('LOWER(s.descripcion) = LOWER(:desc)', { desc: f.descripcion })
-          .getOne();
+    // Carga masiva de existentes (1 query) para no consultar por fila.
+    const existentes = await this.supplyRepo.find({ where: { shop_id: shopId } });
+    const mapExistente = new Map<string, Supply>();
+    for (const s of existentes) mapExistente.set(s.descripcion.toLowerCase(), s);
 
-        if (existente) {
-          existente.unidad = f.unidad;
-          existente.grupo = f.grupo as GrupoInsumo;
-          await this.supplyRepo.save(existente);
-        } else {
-          const creado = await this.supplyRepo.save(
-            this.supplyRepo.create({
-              shop_id: shopId,
-              descripcion: f.descripcion,
-              unidad: f.unidad,
-              grupo: f.grupo as GrupoInsumo,
+    // Separar creaciones de actualizaciones en memoria.
+    const aCrear: Supply[] = [];
+    const aActualizar: Supply[] = [];
+    for (const f of validas) {
+      const clave = f.descripcion.toLowerCase();
+      const existente = mapExistente.get(clave);
+      if (existente) {
+        existente.unidad = f.unidad;
+        existente.grupo = f.grupo as GrupoInsumo;
+        aActualizar.push(existente);
+      } else {
+        aCrear.push(
+          this.supplyRepo.create({
+            shop_id: shopId,
+            descripcion: f.descripcion,
+            unidad: f.unidad,
+            grupo: f.grupo as GrupoInsumo,
+          }),
+        );
+      }
+    }
+
+    let creadosIds: string[] = [];
+    let creadosPrecioIds: string[] = [];
+    try {
+      // Inserción masiva de nuevos insumos (1 statement).
+      if (aCrear.length) {
+        const raw = await this.supplyRepo
+          .createQueryBuilder()
+          .insert()
+          .values(aCrear)
+          .returning('*')
+          .execute();
+        const creados = (raw.raw ?? []) as Supply[];
+        creadosIds = creados.map((c) => c.id);
+        for (const c of creados) mapExistente.set(c.descripcion.toLowerCase(), c);
+      }
+      // Actualización masiva de existentes (1 llamada).
+      if (aActualizar.length) {
+        await this.supplyRepo.save(aActualizar);
+      }
+
+      // Resolución de supply_id por descripción (el mapa ya incluye creados).
+      const conPrecio = validas.filter((f) => f.precio != null);
+      const idsConPrecio = conPrecio.map(
+        (f) => mapExistente.get(f.descripcion.toLowerCase())!.id,
+      );
+
+      // Precios vigentes actuales (1 query para todos los que traen precio).
+      const preciosRows = idsConPrecio.length
+        ? await this.priceRepo
+            .createQueryBuilder('p')
+            .select(['p.supply_id', 'p.valor', 'p.vigente_desde'])
+            .where('p.supply_id IN (:...ids)', { ids: idsConPrecio })
+            .getRawMany()
+        : [];
+      // Elige el vigente más reciente; si no hay vigente, el más reciente (histórico).
+      const mejor = new Map<string, { valor: string; vigente: boolean; ts: number }>();
+      const ahora = Date.now();
+      for (const r of preciosRows) {
+        const id = r.supply_id as string;
+        const ts = new Date(r.vigente_desde as string).getTime();
+        const esVig = ts <= ahora;
+        const cur = mejor.get(id);
+        if (!cur) mejor.set(id, { valor: r.valor as string, vigente: esVig, ts });
+        else if (esVig && (!cur.vigente || ts > cur.ts))
+          mejor.set(id, { valor: r.valor as string, vigente: true, ts });
+        else if (!cur.vigente && ts > cur.ts)
+          mejor.set(id, { valor: r.valor as string, vigente: false, ts });
+      }
+
+      // Inserción masiva de precios que cambian (1 statement).
+      const nuevosPrecios: SupplyPrice[] = [];
+      for (const f of conPrecio) {
+        const supplyId = mapExistente.get(f.descripcion.toLowerCase())!.id;
+        const m = mejor.get(supplyId);
+        const existe = !!m;
+        const valorVig = m?.valor;
+        if (!existe || toCents(valorVig!) !== toCents(f.precio!)) {
+          nuevosPrecios.push(
+            this.priceRepo.create({
+              supply_id: supplyId,
+              valor: fromCents(toCents(f.precio!)),
+              vigente_desde: new Date(),
+              usuario: null,
+              motivo: 'Importación masiva',
+              origen: OrigenPrecio.IMPORTACION,
             }),
           );
-          creadosIds.push(creado.id);
         }
-        aplicados += 1;
       }
+      let preciosRegistrados = 0;
+      if (nuevosPrecios.length) {
+        const rawP = await this.priceRepo
+          .createQueryBuilder()
+          .insert()
+          .values(nuevosPrecios)
+          .returning('*')
+          .execute();
+        creadosPrecioIds = (rawP.raw ?? []).map((p) => (p as { id: string }).id);
+        preciosRegistrados = creadosPrecioIds.length;
+      }
+
+      return {
+        aplicados: validas.length,
+        precios: preciosRegistrados,
+        restore_point_id: restorePointId,
+        punto_restauracion: estadoPrevio,
+      };
     } catch (err) {
       // Rollback manual: restaurar los insumos previos y borrar los creados.
       for (const s of previos) {
@@ -897,6 +1159,9 @@ export class CatalogService {
           await this.supplyRepo.save(sup);
         }
       }
+      if (creadosPrecioIds.length) {
+        await this.priceRepo.delete({ id: In(creadosPrecioIds) });
+      }
       if (creadosIds.length) {
         await this.supplyRepo.delete({ id: In(creadosIds) });
       }
@@ -905,11 +1170,5 @@ export class CatalogService {
         mensaje: 'La importación falló y fue revertida por completo',
       });
     }
-
-    return {
-      aplicados,
-      restore_point_id: restorePointId,
-      punto_restauracion: estadoPrevio,
-    };
   }
 }

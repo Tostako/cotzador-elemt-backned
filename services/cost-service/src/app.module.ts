@@ -16,6 +16,7 @@ import { Quotation } from './entities/quotation.entity';
 import { QuotationLine } from './entities/quotation-line.entity';
 import { AiApuProposal } from './entities/ai-apu-proposal.entity';
 import { OrgBranding } from './entities/org-branding.entity';
+import { Template } from './entities/template.entity';
 import { ProjectsModule } from './projects/projects.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { SuppliesModule } from './supplies/supplies.module';
@@ -38,7 +39,7 @@ import { HealthModule } from './health/health.module';
         type: 'postgres',
         url: config.get<string>('COST_DATABASE_URL') || config.get<string>('SUPABASE_DATABASE_URL'),
         schema: config.get<string>('COST_DATABASE_SCHEMA') || 'cost_pro',
-        entities: [Project, Chapter, Supply, SupplyPrice, Apu, ApuComponent, BudgetItem, BudgetEvent, Document, Quotation, QuotationLine, AiApuProposal, OrgBranding],
+        entities: [Project, Chapter, Supply, SupplyPrice, Apu, ApuComponent, BudgetItem, BudgetEvent, Document, Quotation, QuotationLine, AiApuProposal, OrgBranding, Template],
         synchronize: false,
         retryAttempts: 3,
         retryDelay: 3000,

@@ -4,9 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { Project } from '../entities/project.entity';
+import { Template } from '../entities/template.entity';
 import { Apu } from '../entities/apu.entity';
 import { ApuComponent } from '../entities/apu-component.entity';
 import { Supply } from '../entities/supply.entity';
@@ -14,7 +15,12 @@ import { BudgetItem } from '../entities/budget-item.entity';
 import { BudgetEvent } from '../entities/budget-event.entity';
 import { CostEngine } from '../cost-engine/cost-engine.service';
 import { fromCents, toCents } from '../common/money';
-import { AplicarPlantillaDto } from './templates.dto';
+import {
+  AplicarPlantillaDto,
+  CreateTemplateDto,
+  TemplateActividadDto,
+  UpdateTemplateDto,
+} from './templates.dto';
 
 interface ActivityTemplate {
   apuCodigo: string;
@@ -79,6 +85,7 @@ const PLANTILLAS: Plantilla[] = [
 export class TemplatesService {
   constructor(
     @InjectRepository(Project) private readonly projectRepo: Repository<Project>,
+    @InjectRepository(Template) private readonly templateRepo: Repository<Template>,
     @InjectRepository(Apu) private readonly apuRepo: Repository<Apu>,
     @InjectRepository(ApuComponent) private readonly compRepo: Repository<ApuComponent>,
     @InjectRepository(Supply) private readonly supplyRepo: Repository<Supply>,
@@ -87,16 +94,22 @@ export class TemplatesService {
     private readonly costEngine: CostEngine,
   ) {}
 
-  /** Lista plantillas con valor de referencia recalculado con precios vigentes. */
+  /** Lista plantillas del sistema y propias, con valor de referencia vigente. */
   async listar(shopId: string) {
+    const propias = await this.templateRepo.find({
+      where: { shop_id: shopId, deleted_at: IsNull() },
+      order: { nombre: 'ASC' },
+    });
+
     const datos: Array<{
       id: string;
       codigo: string;
       nombre: string;
-      alcance: string;
+      alcance: string | null;
       area_referencia: number;
       valor_referencia: string;
       actividades: number;
+      origen: 'SISTEMA' | 'PROPIA';
     }> = [];
 
     for (const t of PLANTILLAS) {
@@ -122,14 +135,100 @@ export class TemplatesService {
         area_referencia: t.areaReferencia,
         valor_referencia: fromCents(Math.round(valor)),
         actividades: t.actividades.length,
+        origen: 'SISTEMA',
       });
     }
+
+    for (const t of propias) {
+      let valor = 0;
+      for (const act of t.actividades ?? []) {
+        const apu = await this.apuRepo.findOne({ where: { id: act.apu_id, deleted_at: null } });
+        if (!apu) continue;
+        const costo = await this.costEngine.costoApu(apu.id);
+        valor += toCents(costo.costo_unitario) * act.cantidad;
+      }
+      datos.push({
+        id: t.id,
+        codigo: t.codigo,
+        nombre: t.nombre,
+        alcance: t.alcance,
+        area_referencia: Number(t.area_referencia),
+        valor_referencia: fromCents(Math.round(valor)),
+        actividades: (t.actividades ?? []).length,
+        origen: 'PROPIA',
+      });
+    }
+
     return datos;
+  }
+
+  async crear(shopId: string, customerId: string, dto: CreateTemplateDto) {
+    await this.validarCodigo(shopId, dto.codigo, null);
+
+    let actividades: TemplateActividadDto[];
+    if (dto.project_id) {
+      actividades = await this.actividadesDeProyecto(shopId, customerId, dto.project_id);
+    } else if (dto.actividades?.length) {
+      actividades = dto.actividades;
+    } else {
+      throw new BadRequestException({
+        error: 'ACTIVIDADES_REQUERIDAS',
+        mensaje: 'Indique actividades o un project_id de origen',
+      });
+    }
+
+    await this.validarApus(shopId, actividades);
+
+    const template = this.templateRepo.create({
+      shop_id: shopId,
+      codigo: dto.codigo,
+      nombre: dto.nombre,
+      alcance: dto.alcance ?? null,
+      area_referencia: String(dto.area_referencia ?? 0),
+      actividades,
+    });
+    return this.templateRepo.save(template);
+  }
+
+  async actualizar(shopId: string, customerId: string, id: string, dto: UpdateTemplateDto) {
+    const template = await this.templateRepo.findOne({
+      where: { id, shop_id: shopId, deleted_at: IsNull() },
+    });
+    if (!template) throw new NotFoundException('Plantilla no encontrada');
+
+    if (dto.codigo !== undefined && dto.codigo !== template.codigo) {
+      await this.validarCodigo(shopId, dto.codigo, id);
+      template.codigo = dto.codigo;
+    }
+    if (dto.nombre !== undefined) template.nombre = dto.nombre;
+    if (dto.alcance !== undefined) template.alcance = dto.alcance;
+    if (dto.area_referencia !== undefined) template.area_referencia = String(dto.area_referencia);
+
+    if (dto.project_id !== undefined) {
+      const actividades = await this.actividadesDeProyecto(shopId, customerId, dto.project_id);
+      await this.validarApus(shopId, actividades);
+      template.actividades = actividades;
+    } else if (dto.actividades !== undefined) {
+      await this.validarApus(shopId, dto.actividades);
+      template.actividades = dto.actividades;
+    }
+    return this.templateRepo.save(template);
+  }
+
+  async eliminar(shopId: string, id: string) {
+    const template = await this.templateRepo.findOne({
+      where: { id, shop_id: shopId, deleted_at: IsNull() },
+    });
+    if (!template) throw new NotFoundException('Plantilla no encontrada');
+    template.deleted_at = new Date();
+    await this.templateRepo.save(template);
+    return { ok: true };
   }
 
   /**
    * Aplica una plantilla al presupuesto (HU-02). Operación atómica: si ya hay
-   * contenido, el modo es obligatorio (REEMPLAZAR o AGREGAR).
+   * contenido, el modo es obligatorio (REEMPLAZAR o AGREGAR). Resuelve tanto
+   * plantillas de sistema como plantillas propias.
    */
   async aplicar(
     shopId: string,
@@ -143,11 +242,44 @@ export class TemplatesService {
     });
     if (!project) throw new NotFoundException('Proyecto no encontrado');
 
-    const plantilla = PLANTILLAS.find((t) => t.id === dto.templateId);
-    if (!plantilla) {
+    const resuelto: Array<{ apuId: string; cantidad: number }> = [];
+
+    if (dto.templateId.startsWith('tpl_')) {
+      const plantilla = PLANTILLAS.find((t) => t.id === dto.templateId);
+      if (!plantilla) {
+        throw new BadRequestException({
+          error: 'PLANTILLA_INEXISTENTE',
+          mensaje: 'No existe la plantilla solicitada',
+        });
+      }
+      for (const act of plantilla.actividades) {
+        const apu = await this.apuRepo.findOne({
+          where: { shop_id: shopId, codigo: act.apuCodigo, deleted_at: null },
+        });
+        if (!apu) continue;
+        resuelto.push({ apuId: apu.id, cantidad: act.cantidad });
+      }
+    } else {
+      const template = await this.templateRepo.findOne({
+        where: { id: dto.templateId, shop_id: shopId, deleted_at: IsNull() },
+      });
+      if (!template) {
+        throw new BadRequestException({
+          error: 'PLANTILLA_INEXISTENTE',
+          mensaje: 'No existe la plantilla solicitada',
+        });
+      }
+      for (const act of template.actividades ?? []) {
+        const apu = await this.apuRepo.findOne({ where: { id: act.apu_id, deleted_at: null } });
+        if (!apu) continue;
+        resuelto.push({ apuId: apu.id, cantidad: act.cantidad });
+      }
+    }
+
+    if (resuelto.length === 0) {
       throw new BadRequestException({
-        error: 'PLANTILLA_INEXISTENTE',
-        mensaje: 'No existe la plantilla solicitada',
+        error: 'PLANTILLA_SIN_APUS',
+        mensaje: 'Ningún APU de la plantilla existe en el catálogo',
       });
     }
 
@@ -175,12 +307,10 @@ export class TemplatesService {
     const omitidas: Array<{ apu_id: string; motivo: string }> = [];
     const cargados: Array<{ item_id: string; apu_id: string }> = [];
 
-    for (const act of plantilla.actividades) {
-      const apu = await this.apuRepo.findOne({
-        where: { shop_id: shopId, codigo: act.apuCodigo, deleted_at: null },
-      });
+    for (const { apuId, cantidad } of resuelto) {
+      const apu = await this.apuRepo.findOne({ where: { id: apuId, deleted_at: null } });
       if (!apu) {
-        omitidas.push({ apu_id: act.apuCodigo, motivo: 'APU_NO_EXISTE' });
+        omitidas.push({ apu_id: apuId, motivo: 'APU_NO_EXISTE' });
         continue;
       }
 
@@ -224,7 +354,7 @@ export class TemplatesService {
         },
         descripcion: apu.descripcion,
         unidad: apu.unidad,
-        cantidad: String(act.cantidad),
+        cantidad: String(cantidad),
         valor_unitario: valorUnitario,
       });
       const saved = await this.itemRepo.save(item);
@@ -257,6 +387,65 @@ export class TemplatesService {
       },
       undo_token: evento.undo_token,
     };
+  }
+
+  // ---- helpers -------------------------------------------------------------
+
+  private async actividadesDeProyecto(
+    shopId: string,
+    customerId: string,
+    projectId: string,
+  ): Promise<TemplateActividadDto[]> {
+    const project = await this.projectRepo.findOne({
+      where: { id: projectId, shop_id: shopId, customer_id: customerId, deleted_at: null },
+    });
+    if (!project) throw new NotFoundException('Proyecto no encontrado');
+
+    const items = await this.itemRepo.find({
+      where: { project_id: project.id, deleted_at: null },
+      order: { created_at: 'ASC' },
+    });
+    const actividades = items
+      .filter((i) => i.apu_id && parseFloat(i.cantidad) > 0)
+      .map((i) => ({ apu_id: i.apu_id as string, cantidad: parseFloat(i.cantidad) }));
+    if (actividades.length === 0) {
+      throw new BadRequestException({
+        error: 'PLANTILLA_SIN_ACTIVIDADES',
+        mensaje: 'El proyecto de origen no tiene items con APUs',
+      });
+    }
+    return actividades;
+  }
+
+  private async validarCodigo(shopId: string, codigo: string, exceptoId: string | null) {
+    const existe = await this.templateRepo
+      .createQueryBuilder('t')
+      .where('t.shop_id = :shopId', { shopId })
+      .andWhere('t.codigo = :codigo', { codigo })
+      .andWhere('t.deleted_at IS NULL')
+      .andWhere(exceptoId ? 't.id != :id' : '1=1', exceptoId ? { id: exceptoId } : {})
+      .getOne();
+    if (existe) {
+      throw new BadRequestException({
+        error: 'PLANTILLA_CODIGO_EXISTENTE',
+        mensaje: `Ya existe una plantilla con código ${codigo}`,
+      });
+    }
+  }
+
+  private async validarApus(shopId: string, actividades: TemplateActividadDto[]) {
+    const ids = [...new Set(actividades.map((a) => a.apu_id))];
+    const apus = await this.apuRepo.find({
+      where: { id: In(ids), shop_id: shopId, deleted_at: null },
+    });
+    const encontrados = new Set(apus.map((a) => a.id));
+    const faltantes = ids.filter((id) => !encontrados.has(id));
+    if (faltantes.length) {
+      throw new BadRequestException({
+        error: 'APU_INEXISTENTE',
+        mensaje: `Los siguientes APUs no existen en el catálogo: ${faltantes.join(', ')}`,
+      });
+    }
   }
 
   private async snapState(projectId: string) {

@@ -1,8 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { join } from 'path';
-import { createWriteStream, existsSync, mkdirSync } from 'fs';
+import * as fs from 'fs';
 import * as PDFDocument from 'pdfkit';
 import * as ExcelJS from 'exceljs';
 import { Document } from '../entities/document.entity';
@@ -16,10 +16,17 @@ import { parseCantidad } from '../common/money';
 
 const STORAGE_DIR = process.env.DOCUMENTS_STORAGE_DIR ?? join(__dirname, '..', '..', 'storage');
 
+/** Horas que se conserva un documento generado antes de eliminarlo del storage. */
+const DOCUMENTS_TTL_MS = (Number(process.env.DOCUMENTS_TTL_HOURS) || 24) * 3600 * 1000;
+/** Frecuencia de la limpieza automática. */
+const DOCUMENTS_CLEANUP_INTERVAL_MS = Number(process.env.DOCUMENTS_CLEANUP_INTERVAL_MS) || 60 * 60 * 1000;
+
 const TIPOS_XLSX = ['XLSX_PRESUPUESTO', 'XLSX_INSUMOS', 'XLSX_APUS'];
 
 @Injectable()
-export class DocumentsService {
+export class DocumentsService implements OnModuleInit, OnModuleDestroy {
+  private cleanupTimer?: NodeJS.Timeout;
+
   constructor(
     @InjectRepository(Document) private readonly docRepo: Repository<Document>,
     @InjectRepository(Project) private readonly projectRepo: Repository<Project>,
@@ -71,7 +78,7 @@ export class DocumentsService {
 
   /** Genera el Excel según el tipo solicitado (HU-21). */
   private async generarXlsx(project: Project, doc: Document) {
-    mkdirSync(STORAGE_DIR, { recursive: true });
+    fs.mkdirSync(STORAGE_DIR, { recursive: true });
     const file = `doc-${doc.id}.xlsx`;
     const filePath = join(STORAGE_DIR, file);
 
@@ -174,13 +181,13 @@ export class DocumentsService {
     calculo: Awaited<ReturnType<CostEngine['calcularProyecto']>>,
     doc: Document,
   ) {
-    mkdirSync(STORAGE_DIR, { recursive: true });
+    fs.mkdirSync(STORAGE_DIR, { recursive: true });
 
     const file = `doc-${doc.id}.pdf`;
     const filePath = join(STORAGE_DIR, file);
     const pdf = new PDFDocument({ size: 'A4', margin: 40 });
 
-    const stream = createWriteStream(filePath);
+    const stream = fs.createWriteStream(filePath);
     pdf.pipe(stream);
 
     pdf.fontSize(20).fillColor('#111827').text('COTIZACIÓN', { align: 'center' });
@@ -232,7 +239,54 @@ export class DocumentsService {
 
   rutaArchivo(almacen: string): string {
     const safe = join(STORAGE_DIR, almacen);
-    if (!existsSync(safe)) throw new NotFoundException('Archivo no encontrado');
+    if (!fs.existsSync(safe)) throw new NotFoundException('Archivo no encontrado');
     return safe;
+  }
+
+  // ---- Limpieza automática de storage -------------------------------------
+
+  onModuleInit() {
+    // Ejecuta una limpieza al arrancar y luego cada DOCUMENTS_CLEANUP_INTERVAL_MS.
+    void this.limpiarAntiguos().catch(() => undefined);
+    this.cleanupTimer = setInterval(() => {
+      void this.limpiarAntiguos().catch(() => undefined);
+    }, DOCUMENTS_CLEANUP_INTERVAL_MS);
+  }
+
+  onModuleDestroy() {
+    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+  }
+
+  /**
+   * Elimina los archivos generados en storage más antiguos que el TTL y poda
+   * las filas correspondientes en BD, para no acumular documentos descargados.
+   */
+  async limpiarAntiguos() {
+    const cutoff = Date.now() - DOCUMENTS_TTL_MS;
+    try {
+      await fs.promises.access(STORAGE_DIR);
+    } catch {
+      return;
+    }
+
+    const archivos = await fs.promises.readdir(STORAGE_DIR);
+    for (const nombre of archivos) {
+      if (!nombre.startsWith('doc-')) continue; // solo los generados por el servicio
+      const ruta = join(STORAGE_DIR, nombre);
+      try {
+        const stat = await fs.promises.stat(ruta);
+        if (stat.mtimeMs < cutoff) await fs.promises.unlink(ruta);
+      } catch {
+        // archivo ya no existe o en uso; se reintenta en el próximo ciclo
+      }
+    }
+
+    // Poda de filas viejas para que el API no apunte a archivos ausentes.
+    await this.docRepo
+      .createQueryBuilder()
+      .delete()
+      .where('created_at < :cutoff', { cutoff: new Date(cutoff).toISOString() })
+      .andWhere('estado IN (:...estados)', { estados: ['LISTO', 'ERROR', 'OBSOLETO'] })
+      .execute();
   }
 }

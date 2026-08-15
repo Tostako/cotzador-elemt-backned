@@ -53,16 +53,28 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
-      const body = exception.getResponse() as
-        | string
-        | { message?: string | string[]; mensaje?: string; codigo?: string; error?: string };
+      const body = exception.getResponse() as string | Record<string, unknown>;
+      const extra: Record<string, unknown> = {};
       if (typeof body === 'object' && body !== null) {
         if (typeof body.mensaje === 'string') message = body.mensaje;
         else if (typeof body.message === 'string') message = humanizeValidation(body.message);
         else if (Array.isArray(body.message)) message = humanizeValidation(body.message.join(', '));
         if (typeof body.codigo === 'string') codigo = body.codigo;
         else if (typeof body.error === 'string') codigo = body.error;
+        // Propaga campos adicionales (p.ej. filas_con_error) sin perder el envelope.
+        for (const [k, v] of Object.entries(body)) {
+          if (!['message', 'mensaje', 'codigo', 'error', 'statusCode'].includes(k)) extra[k] = v;
+        }
       }
+      this.logger.error(`[${requestId}] ${req.method} ${req.url} -> ${status}: ${message}`);
+      res.status(status).json({
+        error: message,
+        requestId,
+        timestamp: new Date().toISOString(),
+        ...(codigo ? { codigo } : {}),
+        ...(Object.keys(extra).length ? extra : {}),
+      });
+      return;
     } else if (exception instanceof Error) {
       this.logger.error(`[${requestId}] ${exception.message}`, exception.stack);
     }

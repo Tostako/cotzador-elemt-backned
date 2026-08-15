@@ -4,12 +4,14 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Headers,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
   Query,
+  StreamableFile,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -73,6 +75,17 @@ export class CatalogController {
     @Query() query: { chapter_id?: string; q?: string; page?: number; per_page?: number },
   ) {
     return this.catalogService.listarApus(user.shop_id, query);
+  }
+
+  @Get('apus/export')
+  @Header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  @Header('Content-Disposition', 'attachment; filename="apus.xlsx"')
+  async exportarApus(
+    @CurrentUser() user: CurrentUserData,
+    @Query() query: { chapter_id?: string; q?: string },
+  ): Promise<StreamableFile> {
+    const buf = await this.catalogService.exportarApus(user.shop_id, query);
+    return new StreamableFile(buf);
   }
 
   @Get('apus/:id')
