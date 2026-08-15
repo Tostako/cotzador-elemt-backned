@@ -18,7 +18,7 @@ import { Project } from '../entities/project.entity';
 import { Supply, GrupoInsumo } from '../entities/supply.entity';
 import { SupplyPrice, OrigenPrecio } from '../entities/supply-price.entity';
 import { CostEngine } from '../cost-engine/cost-engine.service';
-import { fromCents, toCents } from '../common/money';
+import { fromCents, toCents, parseCantidad } from '../common/money';
 import {
   CreateChapterDto,
   UpdateChapterDto,
